@@ -1,0 +1,22 @@
+{
+  "name": "ubc-genai-toolkit-llm-example",
+  "version": "0.1.0",
+  "description": "Example CLI app for the ubc-genai-toolkit-llm package.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "readline-sync": "^1.4.10",
+    "ubc-genai-toolkit-llm": "file:..",
+    "ubc-genai-toolkit-core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/readline-sync": "^1.4.8",
+    "typescript": "^5.8.2"
+  }
+}

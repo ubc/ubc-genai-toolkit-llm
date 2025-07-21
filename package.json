@@ -1,0 +1,29 @@
+{
+  "name": "ubc-genai-toolkit-llm",
+  "version": "0.1.0",
+  "description": "LLM module for the UBC GenAI Toolkit, providing a unified interface for interacting with various large language models.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "ollama": "^0.5.14",
+    "openai": "^4.89.0",
+    "ubc-genai-toolkit-core": "^0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "@types/node": "^20.12.12"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "UBC Learning Technology Innovation Centre",
+  "license": "GPL-2.0-only"
+}
