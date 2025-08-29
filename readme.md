@@ -194,6 +194,34 @@ async function streamChat() {
 streamChat();
 ```
 
+### Using Provider-Specific Options
+
+The `LLMOptions` object is designed to be extensible, allowing you to pass any parameter that a specific provider's API supports. The module will pass these options through to the underlying SDK.
+
+This is useful for controlling provider-specific features, such as setting the context window size (`num_ctx`) in Ollama.
+
+```typescript
+async function askWithCustomOptions(question: string) {
+	try {
+		// This example assumes the `llm` module is configured for Ollama
+		const response = await llm.sendMessage(question, {
+			// Standard options
+			temperature: 0.5,
+
+			// Provider-specific options for Ollama
+			// This sets the context window size for the request.
+			// This option would be ignored by other providers like OpenAI.
+			num_ctx: 4096,
+		});
+		console.log('Assistant:', response.content);
+	} catch (error) {
+		console.error('Error sending message:', error);
+	}
+}
+
+askWithCustomOptions('Explain the importance of context windows in LLMs.');
+```
+
 ### Listing Available Models
 
 ```typescript

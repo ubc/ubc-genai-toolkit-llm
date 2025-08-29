@@ -18,6 +18,26 @@ import type {
 	MessageCreateParamsStreaming,
 } from '@anthropic-ai/sdk/resources/messages';
 
+// Helper function to extract known vs. unknown options
+function separateOptions(options: LLMOptions = {}) {
+	const {
+		model,
+		temperature,
+		maxTokens,
+		systemPrompt,
+		responseFormat, // Not directly used by Anthropic chat, but we isolate it
+		stream,
+		...rest
+	} = options;
+
+	const known = { model, temperature, maxTokens, systemPrompt, responseFormat, stream };
+
+	return {
+		known,
+		rest,
+	};
+}
+
 /**
  * Implements the Provider interface for interacting with Anthropic models (e.g., Claude).
  */
@@ -123,6 +143,8 @@ export class AnthropicProvider implements Provider {
 			}));
 
 		try {
+			const { rest } = separateOptions(options);
+
 			// Construct parameters for the Anthropic API call.
 			const params: MessageCreateParamsNonStreaming = {
 				model: model,
@@ -134,6 +156,7 @@ export class AnthropicProvider implements Provider {
 				// Pass the extracted system prompt directly to the 'system' parameter.
 				system: systemPrompt,
 				stream: false,
+				...rest,
 				// TODO: Potentially map other options like stop_sequences if added to LLMOptions
 			};
 
@@ -178,6 +201,7 @@ export class AnthropicProvider implements Provider {
 			}));
 
 		let fullContent = ''; // Accumulates the full response text from stream chunks.
+		const { rest } = separateOptions(options);
 
 		try {
 			// Construct parameters, ensuring stream is set to true.
@@ -188,6 +212,7 @@ export class AnthropicProvider implements Provider {
 				temperature: options?.temperature,
 				system: systemPrompt,
 				stream: true,
+				...rest,
 			};
 
 			const stream = await this.client.messages.create(params);

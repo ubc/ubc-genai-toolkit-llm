@@ -10,6 +10,31 @@ import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
 // Import the Ollama class specifically
 import { Ollama, EmbedResponse } from 'ollama';
 
+// Helper function to extract known vs. unknown options
+function separateOptions(options: LLMOptions = {}) {
+	const {
+		model,
+		temperature,
+		maxTokens,
+		systemPrompt,
+		responseFormat,
+		stream,
+		...rest
+	} = options;
+
+	const known = { model, temperature, maxTokens, systemPrompt, responseFormat, stream };
+	// Map maxTokens to num_predict for Ollama
+	const ollamaSpecific: Record<string, unknown> = {};
+	if (temperature !== undefined) ollamaSpecific.temperature = temperature;
+	if (maxTokens !== undefined) ollamaSpecific.num_predict = maxTokens;
+
+	return {
+		known,
+		ollamaSpecific,
+		rest,
+	};
+}
+
 export class OllamaProvider implements Provider {
 	// Store an instance of the Ollama class
 	private client: Ollama;
@@ -75,10 +100,13 @@ export class OllamaProvider implements Provider {
 				content: msg.content,
 			}));
 
-			// Map options
-			const ollamaOptions: Record<string, unknown> = {};
-			if (options?.temperature !== undefined) ollamaOptions.temperature = options.temperature;
-			if (options?.maxTokens !== undefined) ollamaOptions.num_predict = options.maxTokens;
+			// Separate known, Ollama-specific, and passthrough options
+			const { ollamaSpecific, rest } = separateOptions(options);
+
+			// Merge Ollama-specific options with the rest of the passthrough options
+			const finalOptions = { ...rest, ...ollamaSpecific };
+
+			// Handle system prompt if not already in messages (from known options)
 			if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
 				ollamaMessages.unshift({ role: 'system', content: options.systemPrompt });
 			}
@@ -89,7 +117,7 @@ export class OllamaProvider implements Provider {
 				messages: ollamaMessages,
 				stream: false,
 				format: options?.responseFormat === 'json' ? 'json' : undefined,
-				options: ollamaOptions,
+				options: finalOptions,
 			});
 
 			return this.normalizeResponse(response, model);
@@ -112,9 +140,9 @@ export class OllamaProvider implements Provider {
 			content: msg.content,
 		}));
 
-		const ollamaOptions: Record<string, unknown> = {};
-		if (options?.temperature !== undefined) ollamaOptions.temperature = options.temperature;
-		if (options?.maxTokens !== undefined) ollamaOptions.num_predict = options.maxTokens;
+		const { ollamaSpecific, rest } = separateOptions(options);
+		const finalOptions = { ...rest, ...ollamaSpecific };
+
 		 if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
 			ollamaMessages.unshift({ role: 'system', content: options.systemPrompt });
 		}
@@ -129,7 +157,7 @@ export class OllamaProvider implements Provider {
 				messages: ollamaMessages,
 				stream: true,
 				format: options?.responseFormat === 'json' ? 'json' : undefined,
-				options: ollamaOptions,
+				options: finalOptions,
 			});
 
 			for await (const part of stream) {

@@ -10,6 +10,26 @@ import {
 import { LoggerInterface } from 'ubc-genai-toolkit-core';
 import { APIError } from 'ubc-genai-toolkit-core';
 
+// Helper function to extract known vs. unknown options for OpenAI-compatible APIs
+function separateOpenAIOptions(options: LLMOptions = {}) {
+	const {
+		model,
+		temperature,
+		maxTokens,
+		systemPrompt,
+		responseFormat,
+		stream,
+		...rest
+	} = options;
+
+	const known = { model, temperature, maxTokens, systemPrompt, responseFormat, stream };
+
+	return {
+		known,
+		rest,
+	};
+}
+
 export class OpenAIProvider implements Provider {
 	private client: OpenAI;
 	private logger: LoggerInterface;
@@ -74,6 +94,13 @@ export class OpenAIProvider implements Provider {
 				content: msg.content,
 			}));
 
+			// Handle system prompt if not already in messages
+			if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
+				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
+			}
+
+			const { rest } = separateOpenAIOptions(options);
+
 			const response = await this.client.chat.completions.create({
 				model,
 				messages: openaiMessages,
@@ -84,6 +111,7 @@ export class OpenAIProvider implements Provider {
 						? { type: 'json_object' }
 						: undefined,
 				stream: false,
+				...rest,
 			});
 
 			return this.normalizeResponse(response);
@@ -107,12 +135,20 @@ export class OpenAIProvider implements Provider {
 				content: msg.content,
 			}));
 
+			// Handle system prompt if not already in messages
+			if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
+				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
+			}
+
+			const { rest } = separateOpenAIOptions(options);
+
 			const stream = await this.client.chat.completions.create({
 				model,
 				messages: openaiMessages,
 				temperature: options?.temperature,
 				max_tokens: options?.maxTokens,
 				stream: true,
+				...rest,
 			});
 
 			let fullContent = '';
