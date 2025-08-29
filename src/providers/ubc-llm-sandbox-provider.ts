@@ -338,6 +338,7 @@ export class UbcLlmSandboxProvider implements Provider {
 			const response = await this.client.embeddings.create({
 				model: model,
 				input: texts,
+				encoding_format: 'float', // ollama doesn't support base64 which the OpenAI node client uses by default.
 				...providerOptions, // Pass any remaining options (like dimensions)
 			});
 
