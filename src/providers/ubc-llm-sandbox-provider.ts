@@ -335,12 +335,17 @@ export class UbcLlmSandboxProvider implements Provider {
 			const { truncate, ...providerOptions } = options || {}; // truncate might not be used but keep pattern
 			delete providerOptions.model; // Don't pass our internal model option directly
 
-			const response = await this.client.embeddings.create({
-				model: model,
-				input: texts,
-				encoding_format: 'float', // ollama doesn't support base64 which the OpenAI node client uses by default.
-				...providerOptions, // Pass any remaining options (like dimensions)
-			});
+			// Use a raw post request to bypass the default 'encoding_format'
+			// parameter that client.embeddings.create() automatically adds.
+			const response = await this.client.post('/embeddings', {
+				body: {
+					model: model,
+					input: texts,
+					...providerOptions,
+				},
+				// We need to cast the response to the expected type for the rest of
+				// the function to work correctly.
+			}) as OpenAI.Embeddings.CreateEmbeddingResponse;
 
 			return this.normalizeEmbeddingResponse(response);
 		} catch (error) {
