@@ -1,7 +1,10 @@
+import type { ZodType } from 'zod';
 import {
 	LLMOptions,
 	LLMResponse,
+	LLMStructuredResponse,
 	Message,
+	StructuredOutputOptions,
 	EmbeddingOptions,
 	EmbeddingResponse,
 } from '../types';
@@ -51,4 +54,14 @@ export interface Provider {
 		texts: string[],
 		options?: EmbeddingOptions
 	): Promise<EmbeddingResponse>;
+
+	/**
+	 * Non-streaming structured completion validated against a Zod schema.
+	 * Model and provider must support structured JSON output.
+	 */
+	sendStructuredConversation<T>(
+		messages: Message[],
+		schema: ZodType<T>,
+		options?: StructuredOutputOptions
+	): Promise<LLMStructuredResponse<T>>;
 }

@@ -9,8 +9,10 @@ import {
 	LLMConfig,
 	LLMOptions,
 	LLMResponse,
+	LLMStructuredResponse,
 	Message,
 	ProviderType,
+	StructuredOutputOptions,
 	EmbeddingOptions,
 	EmbeddingResponse,
 } from './types';
@@ -21,6 +23,7 @@ import { AnthropicProvider } from './providers/anthropic-provider';
 import { UbcLlmSandboxProvider } from './providers/ubc-llm-sandbox-provider';
 import { ConversationImpl } from './conversation';
 import { Conversation, ConversationFactory } from './conversation-interface';
+import type { ZodType } from 'zod';
 
 /**
  * Default LLM configuration
@@ -31,6 +34,7 @@ const DEFAULT_LLM_CONFIG: Partial<LLMConfig> = {
 
 /**
  * Main LLM Module facade
+ * 
  */
 export class LLMModule implements ConversationFactory {
 	private provider: Provider;
@@ -39,6 +43,8 @@ export class LLMModule implements ConversationFactory {
 
 	/**
 	 * Create a new LLM module instance
+	 * 
+	 * @param config - The configuration for the LLM module
 	 */
 	constructor(config: Partial<LLMConfig>) {
 		this.config = mergeWithDefaults<LLMConfig>(config, DEFAULT_LLM_CONFIG);
@@ -48,6 +54,10 @@ export class LLMModule implements ConversationFactory {
 
 	/**
 	 * Send a single message to the LLM
+	 * 
+	 * @param message - The message to send to the LLM
+	 * @param options - The options for the LLM
+	 * @returns The response from the LLM
 	 */
 	async sendMessage(
 		message: string,
@@ -64,6 +74,10 @@ export class LLMModule implements ConversationFactory {
 
 	/**
 	 * Send a conversation to the LLM
+	 * 
+	 * @param messages - The messages to send to the LLM
+	 * @param options - The options for the LLM
+	 * @returns The response from the LLM
 	 */
 	async sendConversation(
 		messages: Message[],
@@ -80,7 +94,34 @@ export class LLMModule implements ConversationFactory {
 	}
 
 	/**
+	 * Non-streaming structured completion: provider validates output against the given Zod schema.
+	 * Requires a model that supports structured JSON (provider-specific).
+	 */
+	async sendStructuredConversation<T>(
+		messages: Message[],
+		schema: ZodType<T>,
+		options?: StructuredOutputOptions
+	): Promise<LLMStructuredResponse<T>> {
+		this.logger.debug('Sending structured conversation to LLM', {
+			provider: this.config.provider,
+			model: options?.model || this.config.defaultModel,
+			messageCount: messages.length,
+		});
+
+		const mergedOptions = this.mergeStructuredOptions(options);
+		return this.provider.sendStructuredConversation(
+			messages,
+			schema,
+			mergedOptions
+		);
+	}
+
+	/**
 	 * Stream a conversation to the LLM
+	 * @param messages - The messages to send to the LLM
+	 * @param callback - The callback to use for the LLM
+	 * @param options - The options for the LLM
+	 * @returns The response from the LLM
 	 */
 	async streamConversation(
 		messages: Message[],
@@ -93,7 +134,10 @@ export class LLMModule implements ConversationFactory {
 			messageCount: messages.length,
 		});
 
+		// Merge the options with the stream option
 		const mergedOptions = this.mergeOptions(options, { stream: true });
+
+		// Use the provider to stream the conversation
 		return this.provider.streamConversation(
 			messages,
 			callback,
@@ -156,6 +200,8 @@ export class LLMModule implements ConversationFactory {
 
 	/**
 	 * Initialize the provider based on configuration
+	 * 
+	 * @returns The provider
 	 */
 	private initializeProvider(): Provider {
 		const {
@@ -262,6 +308,10 @@ export class LLMModule implements ConversationFactory {
 
 	/**
 	 * Merge provided options with defaults
+	 * 
+	 * @param options - The options to merge
+	 * @param overrides - The overrides to merge
+	 * @returns The merged options
 	 */
 	private mergeOptions(
 		options?: LLMOptions,
@@ -273,6 +323,28 @@ export class LLMModule implements ConversationFactory {
 			...defaultOptions,
 			...options,
 			...overrides,
+		};
+	}
+
+	/**
+	 * Merge structured output options with defaults
+	 * 
+	 * @param options - The options to merge
+	 * @returns The merged options
+	 */
+	private mergeStructuredOptions(
+		options?: StructuredOutputOptions
+	): StructuredOutputOptions {
+
+		// Merge the options with the structured output options
+		const defaultOptions = this.config.defaultOptions || {};
+
+		// Merge the options with the structured output options
+		return {
+			model: this.config.defaultModel,
+			...defaultOptions,
+			...options,
+			stream: false,
 		};
 	}
 }

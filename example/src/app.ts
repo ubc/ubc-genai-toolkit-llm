@@ -1,31 +1,75 @@
 /**
- * @fileoverview Defines the main application class for the LLM Conversation Example.
+ * @fileoverview Interactive CLI demo for the UBC GenAI Toolkit LLM module.
  *
- * This class orchestrates the conversation flow, including:
- * - Initializing the LLMModule based on provided configuration.
- * - Setting up a conversation with an initial system message.
- * - Handling the user input loop.
- * - Sending user messages to the LLM.
- * - Streaming and displaying the LLM's response.
- * - Handling exit commands and errors.
+ * ## What this file does
+ *
+ * 1. Shows a **menu** (arrow keys + Enter) so you can pick how to talk to the model.
+ * 2. Runs one of three **modes**: normal streaming chat, or two demos that use
+ *    **Zod schemas** so the model must reply in a fixed JSON shape.
+ *
+ * ## How to run
+ *
+ * From the `example/` folder (after `npm install` and `npm run build`):
+ *
+ * - `npm start` — this app (menu + chat).
+ * - `npm run structured-demo` — separate one-shot script; see `structured-paragraph-demo.ts`.
+ *
+ * ## Libraries (why they exist)
+ *
+ * - **@inquirer/select** — draws the menu; Node’s built-in readline cannot move a highlight with ↑/↓.
+ * - **readline-sync** — simple `You:` text prompts inside each mode after the menu.
+ * - **zod** — describes the JSON shape we want from the model; the toolkit validates the reply.
+ *
+ * ## Provider note
+ *
+ * Structured modes need a provider that implements `sendStructuredConversation`. The
+ * **ubc-llm-sandbox** provider does not (yet), so we show an error if you pick a structured mode there.
  */
 
 import readlineSync from 'readline-sync';
-import { LLMModule, LLMConfig, LLMOptions } from 'ubc-genai-toolkit-llm';
-import { ToolkitError } from 'ubc-genai-toolkit-core';
+import select from '@inquirer/select';
+import { z } from 'zod';
+import {
+	LLMModule,
+	LLMConfig,
+	LLMOptions,
+	StructuredOutputOptions,
+} from 'ubc-genai-toolkit-llm';
+import { ToolkitError, APIError } from 'ubc-genai-toolkit-core';
 
 /**
- * Represents the core logic for the interactive LLM conversation application.
+ * JSON shape for the "Contextless Linguist" demo.
+ * Property names include **spaces** on purpose — it shows that Zod keys can match odd JSON keys.
+ */
+const ContextlessLinguistSchema = z.object({
+	'Topic summary': z.string(),
+	'Number of words': z.number(),
+});
+
+/**
+ * JSON shape for the "Isolated Engineer / Scientist" demo (plain `answer` / `explanation` keys).
+ */
+const IsolatedEngineerSchema = z.object({
+	answer: z.string(),
+	explanation: z.string(),
+});
+
+/** Which row the user picked in the opening menu. */
+type DemoMode = 'normal' | 'linguist' | 'engineer';
+
+/**
+ * Orchestrates the example CLI: menu, then the selected conversation mode.
+ *
+ * Flow: `run()` → `promptDemoMode()` → one of `runNormalConversation` or
+ * `runStructuredConversationLoop` depending on the choice.
  */
 export class ConversationApp {
-	// Instance of the LLMModule to interact with the configured LLM provider.
 	private llm: LLMModule;
 
 	/**
-	 * Creates an instance of ConversationApp.
-	 *
-	 * @param {LLMConfig} config The configuration object used to initialize the LLMModule.
-	 *                            This determines the provider, model, API keys/endpoints, etc.
+	 * constructor for the ConversationApp class
+	 * @param config - Same shape as `loadConfig()` from `config.ts` (provider, keys, model, logger).
+	 *                  Passed straight into {@link LLMModule}.
 	 */
 	constructor(config: Partial<LLMConfig>) {
 		// Initialize the LLMModule with the given configuration.
@@ -34,124 +78,240 @@ export class ConversationApp {
 	}
 
 	/**
-	 * Runs the main interactive conversation loop.
+	 * Entry point called from `index.ts`.
 	 *
-	 * - Displays a welcome message and the configured provider.
-	 * - Creates a new conversation instance via the LLMModule.
-	 * - Adds an initial system prompt to guide the LLM's behavior.
-	 * - Enters a loop that:
-	 *   - Prompts the user for input.
-	 *   - Exits if the user types 'exit' or 'quit'.
-	 *   - Adds the user's message to the conversation history.
-	 *   - Streams the LLM's response back to the console.
-	 * - Includes error handling for ToolkitErrors and other unexpected errors.
+	 * Steps:
+	 * 1. Print banner and current provider name.
+	 * 2. Show the interactive menu (or exit if the user cancels with Ctrl+C).
+	 * 3. Branch to normal chat vs. structured demos; structured demos are blocked on sandbox.
 	 */
 	async run(): Promise<void> {
 		console.log(`=== UBC GenAI Toolkit - LLM Conversation Example ===`);
-		// Display the name of the LLM provider being used (e.g., 'openai', 'ollama').
 		console.log(`Provider: ${this.llm.getProviderName()}`);
 
-		// Obtain a new Conversation object from the LLM module.
-		// This object manages the message history for a single chat session.
-		const conversation = this.llm.createConversation();
+		const mode = await this.promptDemoMode();
+		if (mode === undefined) {
+			console.log('Cancelled.');
+			return;
+		}
 
-		// Add an initial system message to set the context or persona for the LLM.
-		// This message is part of the history sent to the LLM but not typically displayed to the user.
+		if (mode === 'normal') {
+			await this.runNormalConversation();
+			return;
+		}
+
+		if (this.llm.getProviderName() === 'ubc-llm-sandbox') {
+			console.error(
+				'Structured modes (Contextless Linguist / Isolated Engineer) are not supported for ubc-llm-sandbox in this toolkit version. Use openai, anthropic, or ollama, or restart and choose Normal Conversation.'
+			);
+			return;
+		}
+
+		if (mode === 'linguist') {
+			await this.runStructuredConversationLoop(
+				ContextlessLinguistSchema,
+				'Contextless Linguist',
+				'contextless_linguist',
+				'Paste or type text. The model returns JSON with "Topic summary" and "Number of words" only (no system prompt).'
+			);
+			return;
+		}
+
+		await this.runStructuredConversationLoop(
+			IsolatedEngineerSchema,
+			'Isolated Engineer / Scientist',
+			'isolated_engineer',
+			'Ask a question. The model returns JSON with "answer" and "explanation" only (no system prompt).'
+		);
+	}
+
+	/**
+	 * Shows the arrow-key menu. Returns `undefined` if the user aborts (e.g. Ctrl+C), which we treat as cancel.
+	 */
+	private async promptDemoMode(): Promise<DemoMode | undefined> {
+		try {
+			return await select<DemoMode>({
+
+				// The message that will be displayed to the user to choose a mode.
+				message: 'Choose a mode (use arrow keys, Enter to confirm)',
+
+				// - Normal Conversation: Streaming chat, default system prompt, no structured JSON.
+				// - Contextless Linguist: No system prompt; structured { "Topic summary": string, "Number of words": number }.
+				// - Isolated Engineer / Scientist: No system prompt; structured { answer: string, explanation: string }.
+
+				choices: [
+					{
+						value: 'normal',
+						name: 'Normal Conversation',
+						description:
+							'Streaming chat, default system prompt, no structured JSON',
+					},
+					{
+						value: 'linguist',
+						name: 'Contextless Linguist',
+						description:
+							'No system prompt; structured { "Topic summary": string, "Number of words": number }',
+					},
+					{
+						value: 'engineer',
+						name: 'Isolated Engineer / Scientist',
+						description:
+							'No system prompt; structured { answer: string, explanation: string }',
+					},
+				],
+			});
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Options passed to {@link Conversation.stream} in normal mode.
+	 * `num_ctx` is an Ollama-only knob (context window); other providers ignore unknown fields where safe.
+	 */
+	private buildStreamOptions(): LLMOptions {
+
+		// Default options for the LLM.
+		const opts: LLMOptions = { temperature: 0.5 };
+
+		// If the provider is Ollama, set the context window to 32768 tokens.
+		if (this.llm.getProviderName() === 'ollama') {
+			opts.num_ctx = 32768;
+		}
+		return opts;
+	}
+
+	/**
+	 * Options for {@link Conversation.sendStructured}. Includes `structuredOutputName` for OpenAI’s
+	 * JSON-schema name field; other providers may ignore it.
+	 */
+	private buildStructuredOptions(structuredOutputName: string): StructuredOutputOptions {
+		const opts: StructuredOutputOptions = {
+			temperature: 0.3,
+			maxTokens: 1024,
+			structuredOutputName,
+		};
+		if (this.llm.getProviderName() === 'ollama') {
+			opts.num_ctx = 32768;
+		}
+		return opts;
+	}
+
+	/**
+	 * **Normal mode** — closest to a classic chat app.
+	 *
+	 * - Adds a **system** message so the model behaves as a helpful assistant.
+	 * - Uses **streaming**: tokens print as they arrive (`conversation.stream`).
+	 */
+	private async runNormalConversation(): Promise<void> {
+		const conversation = this.llm.createConversation();
 		conversation.addMessage(
 			'system',
 			'You are a helpful assistant that provides clear, concise answers.'
 		);
 
-		// --- LLMOptions Examples ---
-		// The `LLMOptions` object allows you to control the behavior of the model.
-		// You can uncomment one of the examples below and pass it to the `conversation.stream()`
-		// method to see how it affects the response.
-
-		// Example 1: Default creative response
-		const creativeOptions: LLMOptions = {
-			temperature: 0.7, // Higher temperature for more creative, less predictable responses
-		};
-
-		// Example 2: More deterministic and concise response
-		const deterministicOptions: LLMOptions = {
-			temperature: 0.1, // Lower temperature for more focused and predictable output
-			maxTokens: 50,      // Limit the response to a maximum of 50 tokens
-		};
-
-		// Example 3: JSON response format (provider support varies)
-		// Note: You might need to adjust the user prompt to specifically ask for a JSON object.
-		const jsonOptions: LLMOptions = {
-			responseFormat: 'json',
-			systemPrompt: 'You are a helpful assistant that only responds in JSON format.',
-			temperature: 0.1,
-		};
-
-		// Example 4: Using a different model (if available on your provider)
-		const differentModelOptions: LLMOptions = {
-			model: 'gpt-3.5-turbo', // Example for OpenAI
-			// model: 'claude-3-haiku-20240307', // Example for Anthropic
-			// model: 'llama3', // Example for Ollama
-		};
-
-		// Example 5: Setting provider-specific options (e.g., context window for Ollama)
-		// This demonstrates passing parameters that are not part of the standard LLMOptions.
-		// `num_ctx` is specific to Ollama and controls the context window size.
-		const customOptions: LLMOptions = {
-			num_ctx: 4096, // Set Ollama's context window to 4096 tokens
-			temperature: 0.5,
-		};
-
-		// --- Active Options ---
-		// To experiment, change the value of `activeOptions` to one of the examples above.
-		const activeOptions = customOptions;
-		console.log('Using LLM Options:', activeOptions);
+		const activeOptions = this.buildStreamOptions();
+		console.log('\nNormal mode. Type exit or quit to leave.');
+		console.log('Using LLM options:', activeOptions);
 
 		try {
-			// Start the interactive loop.
 			while (true) {
-				// Prompt the user for input using readline-sync.
-				const userInput = readlineSync.question('\nYou: ');
 
-				// Check for exit commands.
-				if (
-					userInput.toLowerCase() === 'exit' ||
-					userInput.toLowerCase() === 'quit'
-				) {
+				// Prompt the user for input.
+				const userInput = readlineSync.question('\nYou: ');
+				if (userInput.toLowerCase() === 'exit' || userInput.toLowerCase() === 'quit') {
 					console.log('Goodbye!');
-					break; // Exit the loop.
+					break;
 				}
 
-				// Add the user's input to the conversation history.
+				// Add the user's message to the conversation history.
 				conversation.addMessage('user', userInput);
-
-				// Indicate that the assistant is generating a response.
 				console.log('\nAssistant: ');
 
-				// Call the conversation's stream method to send the history and get a streamed response.
-				// The callback function `(chunk) => process.stdout.write(chunk)` prints each piece
-				// of the response to the console as it arrives.
-				// Options like `temperature` can be passed to control the LLM's generation.
+				// Stream the LLM's response back to the console.
 				await conversation.stream(
 					(chunk) => process.stdout.write(chunk),
-					activeOptions // <-- The active options are passed here
+					activeOptions
 				);
-
-				// Add a newline after the streamed response for better formatting.
 				console.log('\n');
 			}
 		} catch (error) {
-			// Handle errors gracefully.
-			if (error instanceof ToolkitError) {
-				// Specifically handle errors originating from the toolkit modules.
-				// These errors have a code and potentially details.
-				console.error(`Error: ${error.message} (Code: ${error.code})`);
-				if (error.details) {
-					console.error('Details:', error.details);
+			this.logError(error);
+		}
+	}
+
+	/**
+	 * **Structured mode** — no system message; each reply must match the given Zod `schema`.
+	 *
+	 * The toolkit asks the provider for JSON matching the schema, then exposes `result.parsed`
+	 * (already validated). We pretty-print it here.
+	 *
+	 * @param schema - Zod object describing allowed JSON keys and types.
+	 * @param modeTitle - Shown as a section header in the terminal.
+	 * @param structuredOutputName - Passed to the LLM layer (mainly for OpenAI’s schema `name`).
+	 * @param intro - Short instructions printed once when the mode starts.
+	 */
+	private async runStructuredConversationLoop<T>(
+		schema: z.ZodType<T>,
+		modeTitle: string,
+		structuredOutputName: string,
+		intro: string
+	): Promise<void> {
+		const conversation = this.llm.createConversation();
+		const options = this.buildStructuredOptions(structuredOutputName);
+
+		// Print the mode title and introduction.
+		console.log(`\n--- ${modeTitle} ---`);
+		console.log(intro);
+		console.log('Type exit or quit to leave.\n');
+
+		try {
+			while (true) {
+
+				// Prompt the user for input.
+				const userInput = readlineSync.question('You: ');
+				if (userInput.toLowerCase() === 'exit' || userInput.toLowerCase() === 'quit') {
+					console.log('Goodbye!');
+					break;
 				}
-			} else {
-				// Handle any other unexpected errors.
-				console.error('An unexpected error occurred:', error);
+
+				// Add the user's message to the conversation history.
+				conversation.addMessage('user', userInput);
+
+				// Print the structured reply (parsed).
+				console.log('\nStructured reply (parsed):');
+
+				// Send the structured conversation to the LLM.
+				const result = await conversation.sendStructured(schema, options);
+
+				// Print the structured reply (parsed).
+				console.log(JSON.stringify(result.parsed, null, 2));
+				console.log('');
 			}
+		} catch (error) {
+			this.logError(error);
+		}
+	}
+
+	/**
+	 * Maps toolkit / provider errors to readable console output for learners.
+	 */
+	private logError(error: unknown): void {
+		// If the error is a ToolkitError, print the error message and details.
+		if (error instanceof ToolkitError) {
+			console.error(`Error: ${error.message} (Code: ${error.code})`);
+			if (error.details) {
+				console.error('Details:', error.details);
+			}
+		// If the error is an APIError, print the error message and details.
+		} else if (error instanceof APIError) {
+			console.error(`Error: ${error.message} (Code: ${error.code})`);
+			if (error.details) {
+				console.error('Details:', error.details);
+			}
+		// If the error is not a ToolkitError or APIError, print the error message.
+		} else {
+			console.error('An unexpected error occurred:', error);
 		}
 	}
 }

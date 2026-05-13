@@ -1,9 +1,23 @@
 {
   "name": "ubc-genai-toolkit-llm",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "LLM module for the UBC GenAI Toolkit, providing a unified interface for interacting with various large language models.",
+  "homepage": "https://github.com/ubc/ubc-genai-toolkit-llm#readme",
+  "bugs": {
+    "url": "https://github.com/ubc/ubc-genai-toolkit-llm/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ubc/ubc-genai-toolkit-llm.git"
+  },
+  "license": "GPL-2.0-only",
+  "author": "UBC Learning Technology Innovation Centre",
+  "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "directories": {
+    "example": "example"
+  },
   "files": [
     "dist"
   ],
@@ -12,10 +26,12 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "^0.95.2",
     "ollama": "^0.5.14",
     "openai": "^4.89.0",
-    "ubc-genai-toolkit-core": "^0.1.0"
+    "ubc-genai-toolkit-core": "^0.1.0",
+    "zod": "^3.25.0",
+    "zod-to-json-schema": "^3.24.5"
   },
   "devDependencies": {
     "typescript": "^5.8.2",
@@ -23,7 +39,5 @@
   },
   "publishConfig": {
     "access": "public"
-  },
-  "author": "UBC Learning Technology Innovation Centre",
-  "license": "GPL-2.0-only"
+  }
 }

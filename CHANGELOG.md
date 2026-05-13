@@ -2,6 +2,12 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-05-12
+
+### Changed
+
+-   **Structured output behavior:** Ollama structured chat again requires the model’s full `message.content` to be valid JSON before Zod validation (prose-wrapped or fenced JSON in the same string fails at `JSON.parse`). OpenAI and Anthropic structured paths no longer recover from missing `parsed` / `parsed_output` by scanning message text.
+
 ## [0.2.3] - 2025-08-30
 
 ### Fixed

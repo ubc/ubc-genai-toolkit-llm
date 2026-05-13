@@ -2,17 +2,23 @@
   "name": "ubc-genai-toolkit-llm-example",
   "version": "0.1.0",
   "description": "Example CLI app for the ubc-genai-toolkit-llm package.",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "structured-demo": "npm run build && node dist/structured-paragraph-demo.js",
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@inquirer/select": "^5.1.5",
     "dotenv": "^16.4.7",
     "readline-sync": "^1.4.10",
     "ubc-genai-toolkit-llm": "file:..",
-    "ubc-genai-toolkit-core": "^0.1.0"
+    "ubc-genai-toolkit-core": "^0.1.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
