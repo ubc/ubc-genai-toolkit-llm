@@ -194,6 +194,12 @@ async function streamChat() {
 streamChat();
 ```
 
+### Structured output (Zod)
+
+`Conversation.sendStructured` / `LLMModule.sendStructuredConversation` ask the model for JSON that matches your Zod schema. **OpenAI** and **Anthropic** rely on the official SDK structured-parse path (`parsed` / `parsed_output`); if the API does not return a parsed payload, the call fails with an `APIError`. **Ollama** sends JSON Schema in `format`, then runs `JSON.parse` on the **entire** assistant `message.content` string and validates with `schema.safeParse`, so the body must be valid JSON only (no leading or trailing prose). Invalid or non-conforming output still fails with an `APIError`. UBC LLM Sandbox does not implement structured output in this version.
+
+See **[Providers & Models](#providers--models)** for a per-provider table of who supports structured output.
+
 ### Using Provider-Specific Options
 
 The `LLMOptions` object is designed to be extensible, allowing you to pass any parameter that a specific provider's API supports. The module will pass these options through to the underlying SDK.
@@ -241,6 +247,17 @@ listModels();
 ## Providers & Models
 
 The specific models available depend on the configured provider.
+
+### Structured output (Zod) support by provider
+
+`Conversation.sendStructured` / `LLMModule.sendStructuredConversation` require a provider that implements structured completions. Support in this module:
+
+| Provider            | Structured output (`sendStructured` / `sendStructuredConversation`) | Notes |
+| ------------------- | -------------------------------------------------------------------- | ----- |
+| **openai**          | Supported                                                            | Uses OpenAI `beta.chat.completions.parse` with your Zod schema. Use a model that supports **structured outputs** / parse (see OpenAI docs). |
+| **anthropic**       | Supported                                                            | Uses Anthropic `messages.parse` with `zodOutputFormat`. Model must support the Messages API structured output path you configure. |
+| **ollama**          | Supported                                                            | Sends JSON Schema from Zod via Ollama `format`; the assistant message body must be **valid JSON only** before Zod runs. Depends on server/model honoring `format`. |
+| **ubc-llm-sandbox** | **Not supported**                                                    | `sendStructuredConversation` throws `501` in this version. Use `openai`, `anthropic`, or `ollama` for Zod-structured replies. |
 
 ### Provider Interface
 

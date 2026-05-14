@@ -1,62 +1,86 @@
+/**
+ * @fileoverview Anthropic (Claude) implementation of {@link Provider}.
+ *
+ * ## Responsibilities
+ *
+ * - **Chat**: Maps toolkit `Message[]` to the Messages API (`role` + `content` for user/assistant;
+ *   system text uses the top-level `system` field — there is no `system` role in request messages).
+ * - **Structured output**: `sendStructuredConversation` uses `messages.parse` with
+ *   `output_config.format: zodOutputFormat(schema)` so the SDK validates JSON against Zod.
+ * - **Streaming**: Subscribes to `content_block_delta` / `text_delta` events only.
+ * - **Embeddings**: Not supported; {@link embed} always throws `501`.
+ *
+ * ## Options handling
+ *
+ * Toolkit fields (`model`, `temperature`, …) are pulled out so `...rest` can carry Anthropic-only
+ * parameters. `structuredOutputName` is stripped because it is OpenAI-specific and must not be
+ * forwarded to Anthropic.
+ *
+ * @see {@link Provider} for the shared interface.
+ */
+
 import { Provider } from './provider-interface';
 import {
 	LLMOptions,
 	LLMResponse,
+	LLMStructuredResponse,
 	Message,
+	StructuredOutputOptions,
 	EmbeddingOptions,
 	EmbeddingResponse,
 } from '../types';
-import {
-	LoggerInterface,
-	APIError,
-	ConfigurationError,
-} from 'ubc-genai-toolkit-core';
+import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
 import Anthropic from '@anthropic-ai/sdk';
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import type { ZodType } from 'zod';
 import type {
 	MessageParam,
 	MessageCreateParamsNonStreaming,
 	MessageCreateParamsStreaming,
 } from '@anthropic-ai/sdk/resources/messages';
+import type { ModelInfo } from '@anthropic-ai/sdk/resources/models';
 
-// Helper function to extract known vs. unknown options
+/**
+ * Splits {@link LLMOptions} into known toolkit fields vs `rest` spread onto Anthropic requests.
+ */
 function separateOptions(options: LLMOptions = {}) {
 	const {
 		model,
 		temperature,
 		maxTokens,
 		systemPrompt,
-		responseFormat, // Not directly used by Anthropic chat, but we isolate it
+		responseFormat,
 		stream,
+		// OpenAI-only hint; Anthropic ignores it but we strip so it never lands in `...rest` and confuses the SDK.
+		structuredOutputName: _structuredOutputName,
 		...rest
-	} = options;
+	} = options as LLMOptions & { structuredOutputName?: string };
 
-	const known = { model, temperature, maxTokens, systemPrompt, responseFormat, stream };
-
-	return {
-		known,
-		rest,
+	const known = {
+		model,
+		temperature,
+		maxTokens,
+		systemPrompt,
+		responseFormat,
+		stream,
+		structuredOutputName: _structuredOutputName,
 	};
+
+	return { known, rest };
 }
 
-/**
- * Implements the Provider interface for interacting with Anthropic models (e.g., Claude).
- */
 export class AnthropicProvider implements Provider {
 	private client: Anthropic;
 	private logger: LoggerInterface;
 	private defaultModel: string;
 
 	/**
-	 * Initializes the Anthropic provider.
-	 * @param apiKey - The Anthropic API key.
-	 * @param defaultModel - The default model ID to use if not specified in options.
-	 * @param logger - An instance conforming to LoggerInterface for logging.
+	 * Initializes a new instance of the AnthropicProvider
+	 * @param apiKey - Anthropic API key.
+	 * @param defaultModel - Used when `options.model` is omitted.
+	 * @param logger - Toolkit logger for diagnostics.
 	 */
-	constructor(
-		apiKey: string,
-		defaultModel: string,
-		logger: LoggerInterface
-	) {
+	constructor(apiKey: string, defaultModel: string, logger: LoggerInterface) {
 		this.client = new Anthropic({ apiKey });
 		this.defaultModel = defaultModel;
 		this.logger = logger;
@@ -79,11 +103,13 @@ export class AnthropicProvider implements Provider {
 	async getAvailableModels(): Promise<string[]> {
 		this.logger.debug('Fetching available Anthropic models');
 		try {
-			const modelInfos: Anthropic.Models.ModelInfo[] = [];
-			// Use for await...of to automatically handle pagination of models.list()
+			const modelInfos: ModelInfo[] = [];
+			// SDK async iterator may paginate; collect everything so callers see the full catalog, not just the first page.
 			for await (const modelInfo of this.client.models.list()) {
 				modelInfos.push(modelInfo);
 			}
+
+			// Map the model information to the model IDs
 			const modelIds = modelInfos.map((model) => model.id);
 			this.logger.debug(`Found ${modelIds.length} Anthropic models`);
 			return modelIds;
@@ -105,17 +131,19 @@ export class AnthropicProvider implements Provider {
 		options?: LLMOptions
 	): Promise<LLMResponse> {
 		this.logger.debug('sendMessage: Delegating to sendConversation');
+		// System is not duplicated here: sendConversation reads `options.systemPrompt` into the top-level `system` field.
 		const messages: Message[] = [{ role: 'user', content: message }];
-		// System prompt, if provided in options, is handled by sendConversation
+		// Delegate to the main sendConversation method.
 		return this.sendConversation(messages, options);
 	}
 
 	/**
-	 * Sends a full conversation history (sequence of messages) to the Anthropic API.
-	 * Handles mapping toolkit message format and options to the Anthropic SDK format.
-	 * @param messages - An array of Message objects representing the conversation history.
-	 * @param options - Optional LLM parameters (model, temperature, maxTokens, systemPrompt, etc.).
-	 * @returns A promise resolving to the LLMResponse containing the assistant's reply.
+	 * Non-streaming Messages API call. `options.systemPrompt` becomes the `system` parameter; any
+	 * `system` entries inside `messages` are filtered out of `messages` because Anthropic expects
+	 * system text only at the top level.
+	 * @param messages - The messages to send to the Anthropic API
+	 * @param options - The options for the Anthropic API
+	 * @returns The response from the Anthropic API
 	 */
 	async sendConversation(
 		messages: Message[],
@@ -132,10 +160,8 @@ export class AnthropicProvider implements Provider {
 			// options: options // Consider selective logging if needed
 		});
 
-		// Filter out any 'system' messages from the main array, as Anthropic uses a top-level 'system' parameter.
-		// Map roles 'user' and 'assistant' which align directly.
+		// Anthropic does not allow `system` inside `messages`; system-only instructions must use the top-level `system` field instead.
 		const anthropicMessages: MessageParam[] = messages
-			// Use a type predicate to assure TypeScript the role is narrowed after filtering.
 			.filter((msg): msg is Message & { role: 'user' | 'assistant' } => msg.role !== 'system')
 			.map((msg) => ({
 				role: msg.role,
@@ -149,8 +175,7 @@ export class AnthropicProvider implements Provider {
 			const params: MessageCreateParamsNonStreaming = {
 				model: model,
 				messages: anthropicMessages,
-				// Anthropic requires max_tokens. Use provided value or a default.
-				// 4096 is a common default for Claude 3 models, adjust if necessary.
+				// API requires a positive max_tokens; 4096 matches a reasonable default when callers omit maxTokens.
 				max_tokens: options?.maxTokens || 4096,
 				temperature: options?.temperature,
 				// Pass the extracted system prompt directly to the 'system' parameter.
@@ -161,8 +186,6 @@ export class AnthropicProvider implements Provider {
 			};
 
 			const response = await this.client.messages.create(params);
-
-			// Normalize the Anthropic response to the toolkit's LLMResponse format.
 			return this.normalizeResponse(response);
 		} catch (error) {
 			this.logger.error('Error sending conversation to Anthropic', { error });
@@ -171,12 +194,76 @@ export class AnthropicProvider implements Provider {
 	}
 
 	/**
-	 * Sends a conversation history to the Anthropic API and streams the response.
-	 * Chunks of the response are passed to the provided callback function.
-	 * @param messages - An array of Message objects representing the conversation history.
-	 * @param callback - A function to be called with each received chunk of text.
-	 * @param options - Optional LLM parameters.
-	 * @returns A promise resolving to the final LLMResponse containing the accumulated content (usage data will be undefined).
+	 * Structured completion: same message mapping as {@link sendConversation}, but uses
+	 * `messages.parse` so `response.parsed_output` is validated against `schema`.
+	 * 
+	 * @param messages - The messages to send to the Anthropic API
+	 * @param schema - The schema to use for the structured output
+	 * @param options - The options for the Anthropic API
+	 * @returns The response from the Anthropic API
+	 *
+	 * @throws {APIError} If `parsed_output` is null after a successful HTTP response.
+	 */
+	async sendStructuredConversation<T>(
+		messages: Message[],
+		schema: ZodType<T>,
+		options?: StructuredOutputOptions
+	): Promise<LLMStructuredResponse<T>> {
+		const model = options?.model || this.defaultModel;
+		const systemPrompt = options?.systemPrompt;
+
+		const anthropicMessages: MessageParam[] = messages
+			.filter((msg): msg is Message & { role: 'user' | 'assistant' } => msg.role !== 'system')
+			.map((msg) => ({
+				role: msg.role,
+				content: msg.content,
+			}));
+
+		try {
+			const { rest } = separateOptions(options);
+
+			// `parse` validates `parsed_output` against the Zod schema server-side (when supported); we still null-check below.
+			const response = await this.client.messages.parse({
+				model,
+				messages: anthropicMessages,
+				max_tokens: options?.maxTokens || 4096,
+				temperature: options?.temperature,
+				system: systemPrompt,
+				stream: false,
+				output_config: {
+					format: zodOutputFormat(schema),
+				},
+				...rest,
+			});
+
+			// Successful HTTP does not guarantee parsed_output (e.g. stop before structured body); treat as hard failure for callers expecting T.
+			if (response.parsed_output == null) {
+				throw new APIError(
+					'Anthropic structured completion returned no parsed_output',
+					502,
+					{ provider: 'anthropic', stop_reason: response.stop_reason }
+				);
+			}
+
+			const base = this.normalizeResponse(response);
+			const parsed = response.parsed_output as T;
+			return {
+				...base,
+				content: JSON.stringify(parsed),
+				parsed,
+			};
+		} catch (error) {
+			this.logger.error('Error sending structured conversation to Anthropic', {
+				error,
+			});
+			throw this.handleError(error);
+		}
+	}
+
+	/**
+	 * Streams assistant text: listens for `content_block_delta` with `text_delta` only. Token usage
+	 * on the returned {@link LLMResponse} is left undefined (full usage is available on stream
+	 * end events; this provider keeps the implementation small).
 	 */
 	async streamConversation(
 		messages: Message[],
@@ -219,7 +306,7 @@ export class AnthropicProvider implements Provider {
 
 			// Process the stream events asynchronously.
 			for await (const event of stream) {
-				// We are interested in the text delta events.
+				// Ignore tool deltas, thinking blocks, etc.: we only stitch plain assistant text for the streaming callback contract.
 				if (
 					event.type === 'content_block_delta' &&
 					event.delta.type === 'text_delta'
@@ -241,7 +328,7 @@ export class AnthropicProvider implements Provider {
 				content: fullContent,
 				model: model,
 				usage: {
-					// Usage data is not reliably collected during the stream in this implementation.
+					// Stream end events can carry usage; we leave these undefined to keep the stream path simple unless we subscribe to more event types.
 					promptTokens: undefined,
 					completionTokens: undefined,
 					totalTokens: undefined,
@@ -259,8 +346,9 @@ export class AnthropicProvider implements Provider {
 	// --- Helper Methods ---
 
 	/**
-	 * Generate embeddings (Not supported by Anthropic provider).
-	 * Throws an APIError indicating lack of support.
+	 * Anthropic does not expose embeddings on this code path.
+	 *
+	 * @throws {APIError} Always — HTTP 501 Not Implemented.
 	 */
 	async embed(
 		texts: string[],
@@ -318,6 +406,7 @@ export class AnthropicProvider implements Provider {
 	private handleError(error: any): Error {
 		this.logger.error('Anthropic API Error encountered', { error });
 
+		// Prefer typed SDK errors for status propagation; fall back to stringifying unknown throwables.
 		if (error instanceof Anthropic.APIError) {
 			// Log specific known details from Anthropic API errors.
 			this.logger.error('Anthropic APIError details', {
@@ -340,4 +429,4 @@ export class AnthropicProvider implements Provider {
 			{ provider: 'anthropic', originalError: error }
 		);
 	}
-} // End of class AnthropicProvider
+}

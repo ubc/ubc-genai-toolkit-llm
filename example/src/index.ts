@@ -1,9 +1,19 @@
 /**
- * @fileoverview Entry point for the LLM Conversation Example Application.
+ * @fileoverview **Program entry** for the interactive example (`npm start`).
  *
- * This script initializes the application by loading configuration,
- * creating an instance of the ConversationApp, and running it.
- * It also includes basic error handling for application startup failures.
+ * ## What happens
+ *
+ * 1. `loadConfig()` reads `.env` / environment variables (see `config.ts`).
+ * 2. `ConversationApp` wraps `LLMModule` and owns the CLI menu + chat loops (`app.ts`).
+ * 3. `app.run()` is async — we `await` it so errors bubble to the `try/catch` below.
+ *
+ * ## Commands (from `example/` directory)
+ *
+ * | Command | What it runs |
+ * |---------|----------------|
+ * | `npm run build` | Compile TypeScript → `dist/` |
+ * | `npm start` | `node dist/index.js` — this file |
+ * | `npm run structured-demo` | One-shot structured JSON test (`structured-paragraph-demo.ts`) |
  */
 
 import { loadConfig } from './config';

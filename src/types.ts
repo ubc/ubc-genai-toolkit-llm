@@ -101,6 +101,16 @@ export interface LLMOptions {
 }
 
 /**
+ * Options for {@link LLMModule.sendStructuredConversation} and provider structured paths.
+ * Extends {@link LLMOptions}; `structuredOutputName` is only used by OpenAI (`zodResponseFormat` schema name).
+ *
+ * Structured completion is always non-streaming at the HTTP layer, regardless of `stream` in options.
+ */
+export type StructuredOutputOptions = LLMOptions & {
+	structuredOutputName?: string;
+};
+
+/**
  * Standardized LLM response
  */
 export interface LLMResponse {
@@ -128,6 +138,16 @@ export interface LLMResponse {
 	 */
 	metadata?: Record<string, any>;
 }
+
+/**
+ * Result of a Zod-validated structured completion. `content` holds the raw JSON string when available;
+ * `parsed` is the validated object.
+ */
+export interface LLMStructuredResponse<T = unknown> extends LLMResponse {
+	parsed: T;
+}
+
+export type { ZodType } from 'zod';
 
 /**
  * Options specifically for embedding requests.

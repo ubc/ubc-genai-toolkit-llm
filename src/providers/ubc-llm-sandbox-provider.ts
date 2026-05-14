@@ -15,6 +15,7 @@
  * - Supports text embedding generation (`embed`).
  * - Maps UBC LLM Sandbox API responses and errors to the toolkit's standard interfaces.
  * - Requires an explicit endpoint URL during instantiation, unlike some other providers.
+ * - Does not support structured output (Coming soon)
  *
  * @see {Provider} Interface definition for LLM providers.
  * @see {@link https://developer.ubc.ca/sandbox/llm} For more information about the UBC LLM Sandbox.
@@ -24,11 +25,14 @@ import { Provider } from './provider-interface';
 import {
 	LLMOptions,
 	LLMResponse,
+	LLMStructuredResponse,
 	Message,
+	StructuredOutputOptions,
 	EmbeddingOptions,
 	EmbeddingResponse,
 } from '../types';
 import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
+import type { ZodType } from 'zod';
 
 // Helper function to extract known vs. unknown options for OpenAI-compatible APIs
 function separateOpenAIOptions(options: LLMOptions = {}) {
@@ -39,10 +43,19 @@ function separateOpenAIOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		structuredOutputName: _structuredOutputName,
 		...rest
-	} = options;
+	} = options as LLMOptions & { structuredOutputName?: string };
 
-	const known = { model, temperature, maxTokens, systemPrompt, responseFormat, stream };
+	const known = {
+		model,
+		temperature,
+		maxTokens,
+		systemPrompt,
+		responseFormat,
+		stream,
+		structuredOutputName: _structuredOutputName,
+	};
 
 	return {
 		known,
@@ -221,6 +234,27 @@ export class UbcLlmSandboxProvider implements Provider {
 			this.logger.error('Error calling UBC LLM Sandbox API', { error });
 			throw this.handleError(error);
 		}
+	}
+
+	/**
+	 * Sends a structured conversation to the LLM and retrieves the response.
+	 *
+	 * This method is not supported by the UBC LLM Sandbox provider in this version.
+	 * @param messages - The messages to send to the UBC LLM Sandbox API
+	 * @param schema - The schema to use for the structured output
+	 * @param options - The options for the UBC LLM Sandbox API
+	 * @returns The response from the UBC LLM Sandbox API
+	 */
+	async sendStructuredConversation<T>(
+		_messages: Message[],
+		_schema: ZodType<T>,
+		_options?: StructuredOutputOptions
+	): Promise<LLMStructuredResponse<T>> {
+		throw new APIError(
+			'Structured Zod output is not supported by the UBC LLM Sandbox provider in this version.',
+			501,
+			{ provider: 'ubc-llm-sandbox' }
+		);
 	}
 
 	/**

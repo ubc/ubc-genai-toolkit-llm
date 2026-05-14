@@ -2,7 +2,14 @@
  * @fileoverview Defines the ConversationImpl class, which manages a conversation history
  * and interacts with an LLM via a ConversationFactory.
  */
-import { Message, LLMOptions, LLMResponse } from './types';
+import {
+	Message,
+	LLMOptions,
+	LLMResponse,
+	LLMStructuredResponse,
+	StructuredOutputOptions,
+} from './types';
+import type { ZodType } from 'zod';
 import { Conversation, ConversationFactory } from './conversation-interface';
 
 /**
@@ -91,11 +98,9 @@ export class ConversationImpl implements Conversation {
 			callback(chunk); // Pass the chunk to the original callback
 		};
 
-		// Use the factory to stream the conversation.
-		// Cast to 'any' for the same reason as in the send method.
-		const response = await (this.factory as any).streamConversation(
+		const response = await this.factory.streamConversation(
 			this.messages,
-			wrappedCallback, // Use the wrapped callback
+			wrappedCallback,
 			options
 		);
 
@@ -108,6 +113,24 @@ export class ConversationImpl implements Conversation {
 
 		// It's assumed streamConversation returns a response object similar to sendConversation,
 		// potentially containing metadata even if content was streamed. Return this object.
+		return response;
+	}
+
+	async sendStructured<T>(
+		schema: ZodType<T>,
+		options?: StructuredOutputOptions
+	): Promise<LLMStructuredResponse<T>> {
+
+		// Use the factory to send the structured conversation.
+		const response = await this.factory.sendStructuredConversation(
+			this.messages,
+			schema,
+			options
+		);
+
+		// Add the assistant's response to the conversation history
+		this.addMessage('assistant', JSON.stringify(response.parsed));
+
 		return response;
 	}
 }

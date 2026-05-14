@@ -1,9 +1,34 @@
 /**
- * @fileoverview Configuration loader for the LLM Conversation Example Application.
+ * @fileoverview Loads **environment variables** into a config object for `LLMModule`.
  *
- * This module handles loading configuration settings from environment variables
- * using the `dotenv` package. It defines the structure of the configuration object (`LLMConfig`)
- * expected by the LLM module and provides default values where appropriate.
+ * ## Why a separate file?
+ *
+ * Keeping config in one place makes it obvious what you must set before running the example,
+ * and matches how a real app would load secrets (never hard-code API keys in source).
+ *
+ * ## `.env` file (optional but recommended)
+ *
+ * Create `example/.env` (this file is usually git-ignored) with lines like:
+ *
+ * ```
+ * LLM_PROVIDER=openai
+ * LLM_API_KEY=sk-...
+ * LLM_DEFAULT_MODEL=gpt-4o
+ * ```
+ *
+ * `dotenv.config()` runs when this module loads and copies those into `process.env`.
+ *
+ * ## Environment variables (quick reference)
+ *
+ * | Variable | Required? | Purpose |
+ * |----------|-----------|---------|
+ * | `LLM_PROVIDER` | No (default `openai`) | `openai` \| `anthropic` \| `ollama` \| `ubc-llm-sandbox` |
+ * | `LLM_API_KEY` | Yes for OpenAI, Anthropic, sandbox | Secret token for the API |
+ * | `LLM_ENDPOINT` | Yes for `ollama`, sandbox | Base URL (e.g. `http://127.0.0.1:11434` for Ollama) |
+ * | `LLM_DEFAULT_MODEL` | Strongly recommended | Model id (e.g. `gpt-4o`, `claude-sonnet-4-5-20250929`) |
+ * | `DEBUG` | No | Set to `true` for more verbose toolkit logging |
+ *
+ * If `LLM_DEFAULT_MODEL` is missing, some demos (e.g. `structured-paragraph-demo`) will error until you set it.
  */
 
 import dotenv from 'dotenv';
@@ -25,12 +50,12 @@ dotenv.config();
  * @returns {LLMConfig} The configuration object for the LLM module.
  */
 export function loadConfig(): Partial<LLMConfig> {
-	// Determine the LLM provider. Defaults to 'openai'.
-	// The type assertion ensures the value matches the expected literal types.
+	// Backend selector for `LLMModule` (must match a registered provider name).
 	const provider = (process.env.LLM_PROVIDER || 'openai') as
 		| 'openai'
 		| 'anthropic'
-		| 'ollama';
+		| 'ollama'
+		| 'ubc-llm-sandbox';
 
 	// Get the API key from environment variables. Required for providers like OpenAI.
 	const apiKey = process.env.LLM_API_KEY;
