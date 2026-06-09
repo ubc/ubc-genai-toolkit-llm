@@ -75,6 +75,16 @@ function separateOptions(options: LLMOptions = {}) {
 	};
 }
 
+/**
+ * Ollama attaches images to a message via an `images` field of base64 strings
+ * (vision-capable models). Returns an empty object for text-only messages.
+ */
+function ollamaImages(msg: Message): { images?: string[] } {
+	return msg.images && msg.images.length > 0
+		? { images: msg.images.map((image) => image.data) }
+		: {};
+}
+
 export class OllamaProvider implements Provider {
 	// Store an instance of the Ollama class
 	private client: Ollama;
@@ -170,6 +180,7 @@ export class OllamaProvider implements Provider {
 			const ollamaMessages = messages.map((msg) => ({
 				role: msg.role,
 				content: msg.content,
+				...ollamaImages(msg),
 			}));
 
 			// Separate known, Ollama-specific, and passthrough options
@@ -227,6 +238,7 @@ export class OllamaProvider implements Provider {
 			const ollamaMessages = messages.map((msg) => ({
 				role: msg.role,
 				content: msg.content,
+				...ollamaImages(msg),
 			}));
 
 			// Separate known, Ollama-specific, and passthrough options
@@ -319,6 +331,7 @@ export class OllamaProvider implements Provider {
 		const ollamaMessages = messages.map((msg) => ({
 			role: msg.role,
 			content: msg.content,
+			...ollamaImages(msg),
 		}));
 
 		const { ollamaSpecific, rest } = separateOptions(options);

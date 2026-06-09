@@ -2,6 +2,12 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-09
+
+### Added
+
+-   **Multi-modal image input.** `Message` now accepts an optional `images` array (`{ data: base64, mimeType }`). When present, each provider builds a multi-part request combining the text `content` with the image(s): OpenAI / UBC LLM Sandbox use base64 `image_url` data URLs, Anthropic uses base64 `image` content blocks, and Ollama attaches base64 strings via the message `images` field. Works across `sendConversation`, `streamConversation`, and (OpenAI/Anthropic) `sendStructuredConversation`. Messages without `images` are unchanged and fully backwards compatible.
+
 ## [0.2.4] - 2026-05-12
 
 ### Changed
