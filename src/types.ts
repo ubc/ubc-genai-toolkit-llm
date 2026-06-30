@@ -61,6 +61,18 @@ export interface Message {
 }
 
 /**
+ * Unified reasoning depth passed through {@link LLMOptions.reasoningEffort}.
+ */
+export type ReasoningEffort =
+	| 'none'
+	| 'minimal'
+	| 'low'
+	| 'medium'
+	| 'high'
+	| 'xhigh'
+	| 'max';
+
+/**
  * Options for sending messages
  */
 export interface LLMOptions {
@@ -75,7 +87,15 @@ export interface LLMOptions {
 	temperature?: number;
 
 	/**
+	 * Unified reasoning depth. Each provider maps this to its native API field.
+	 * Choose a value supported by your model; invalid combinations are rejected by the provider API.
+	 * @see readme.md — Reasoning effort & temperature compatibility
+	 */
+	reasoningEffort?: ReasoningEffort;
+
+	/**
 	 * Maximum tokens to generate
+	 * 
 	 */
 	maxTokens?: number;
 

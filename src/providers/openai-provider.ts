@@ -48,10 +48,17 @@ function separateOpenAIOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		reasoningEffort,
 		// Rename so it is not forwarded in `rest`; only structured calls need the name, and generic chat must not send it.
 		structuredOutputName: _structuredOutputName,
+		reasoning_effort: _reasoning_effort,
+		max_completion_tokens: _max_completion_tokens,
 		...rest
-	} = options as LLMOptions & { structuredOutputName?: string };
+	} = options as LLMOptions & {
+		structuredOutputName?: string;
+		reasoning_effort?: string;
+		max_completion_tokens?: number;
+	};
 
 	// Create a new object with the known options
 	const known = {
@@ -61,11 +68,22 @@ function separateOpenAIOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		reasoningEffort,
 		structuredOutputName: _structuredOutputName,
 	};
 
 	// Return the known options and the rest of the options
 	return { known, rest };
+}
+
+/** Maps toolkit `reasoningEffort` to OpenAI `reasoning_effort` without rewriting the value. */
+function openAIReasoningEffort(
+	reasoningEffort: LLMOptions['reasoningEffort']
+): { reasoning_effort?: string } {
+	if (reasoningEffort === undefined) {
+		return {};
+	}
+	return { reasoning_effort: reasoningEffort };
 }
 
 export class OpenAIProvider implements Provider {
@@ -173,6 +191,7 @@ export class OpenAIProvider implements Provider {
 				messages: openaiMessages,
 				temperature: options?.temperature,
 				max_tokens: options?.maxTokens,
+				...openAIReasoningEffort(options?.reasoningEffort),
 				// OpenAI JSON mode is opt-in via response_format; omit entirely when not requested so the model stays unconstrained.
 				response_format:
 					options?.responseFormat === 'json'
@@ -181,7 +200,7 @@ export class OpenAIProvider implements Provider {
 				// Explicit false: callers might pass `stream` in `rest`; we need a non-streaming completion for normalizeResponse.
 				stream: false,
 				...rest,
-			});
+			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
 
 			return this.normalizeResponse(response);
 		} catch (error) {
@@ -225,11 +244,12 @@ export class OpenAIProvider implements Provider {
 				messages: openaiMessages,
 				temperature: options?.temperature,
 				max_tokens: options?.maxTokens,
+				...openAIReasoningEffort(options?.reasoningEffort),
 				response_format: zodResponseFormat(schema, formatName),
 				// parse() is non-streaming only; keep false so `...rest` cannot flip this to a stream by accident.
 				stream: false,
 				...rest,
-			});
+			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
 
 			const message = response.choices[0]?.message;
 			const refusal = (message as { refusal?: string } | undefined)?.refusal;
@@ -299,9 +319,10 @@ export class OpenAIProvider implements Provider {
 				messages: openaiMessages,
 				temperature: options?.temperature,
 				max_tokens: options?.maxTokens,
+				...openAIReasoningEffort(options?.reasoningEffort),
 				stream: true,
 				...rest,
-			});
+			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
 
 			let fullContent = '';
 			for await (const chunk of stream) {

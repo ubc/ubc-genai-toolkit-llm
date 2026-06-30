@@ -17,7 +17,7 @@ npm install ubc-genai-toolkit-llm ubc-genai-toolkit-core
 -   **`LLMModule`**: The main class and entry point for interacting with LLMs. You configure it once with your provider details.
 -   **Providers**: The module supports different LLM providers (`openai`, `anthropic`, `ollama`, `ubc-llm-sandbox`). The specific provider implementation is handled internally based on your configuration.
 -   **`Conversation`**: A helper class obtained via `llmModule.createConversation()` to easily manage multi-turn chat history and interact with the LLM contextually.
--   **`LLMOptions`**: An interface defining parameters you can pass to customize LLM requests (e.g., `model`, `temperature`, `maxTokens`, `systemPrompt`).
+-   **`LLMOptions`**: An interface defining parameters you can pass to customize LLM requests (e.g., `model`, `temperature`, `reasoningEffort`, `maxTokens`, `systemPrompt`).
 -   **`LLMResponse`**: A standardized response format returned by the module, containing the LLM's content, model used, usage statistics (where available), and metadata.
 
 ## Configuration
@@ -41,6 +41,7 @@ interface LLMConfig {
 interface LLMOptions {
 	model?: string; // Override the default model for a specific request
 	temperature?: number; // Sampling temperature
+	reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; // Unified reasoning depth (provider-specific mapping)
 	maxTokens?: number; // Maximum tokens to generate
 	systemPrompt?: string; // System prompt to guide the model
 	responseFormat?: 'text' | 'json'; // Specify response format (provider support varies)
@@ -199,6 +200,28 @@ streamChat();
 `Conversation.sendStructured` / `LLMModule.sendStructuredConversation` ask the model for JSON that matches your Zod schema. **OpenAI** and **Anthropic** rely on the official SDK structured-parse path (`parsed` / `parsed_output`); if the API does not return a parsed payload, the call fails with an `APIError`. **Ollama** sends JSON Schema in `format`, then runs `JSON.parse` on the **entire** assistant `message.content` string and validates with `schema.safeParse`, so the body must be valid JSON only (no leading or trailing prose). Invalid or non-conforming output still fails with an `APIError`. UBC LLM Sandbox does not implement structured output in this version.
 
 See **[Providers & Models](#providers--models)** for a per-provider table of who supports structured output.
+
+### Reasoning effort & temperature
+
+> **Warning:** Do not combine `temperature` with reasoning on models that reject sampling parameters. On some models, such as **gpt-5-mini**, temperature is unsupported when reasoning is active — omit `temperature` yourself or the API will return an error.
+
+Use the unified `reasoningEffort` option on `LLMOptions`. Each provider maps it to native API fields; **you** choose a value supported by your model (see table below). Unsupported values are rejected by the provider API, not rewritten by this module.
+
+| Model | Temperature | Reasoning effort | Docs |
+|---|---|---|---|
+| gpt-4o-mini | Yes | No | [GPT-4o mini](https://developers.openai.com/api/docs/models/gpt-4o-mini) |
+| gpt-5-mini | No (when reasoning active) | Yes — `minimal`, `low`, `medium`, `high` | [GPT-5 mini](https://developers.openai.com/api/docs/models/gpt-5-mini) |
+
+**Usage (OpenAI gpt-5-mini):**
+
+```typescript
+await llm.sendMessage('Explain quicksort.', {
+	reasoningEffort: 'low',
+	maxTokens: 1024,
+});
+```
+
+On **Anthropic**, adaptive models (Sonnet 4.6+, Opus 4.7+, Sonnet 5) receive `thinking: { type: 'adaptive' }` plus `output_config.effort`. Older models fall back to approximate `budget_tokens` tiers. On **Ollama**, `think` is sent as a top-level chat field (`false` or `'low'`/`'medium'`/`'high'`/`'max'`). Model support varies — some Ollama models ignore `think: false`.
 
 ### Using Provider-Specific Options
 

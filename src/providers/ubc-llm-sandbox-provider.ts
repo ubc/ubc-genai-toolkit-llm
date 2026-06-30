@@ -43,9 +43,16 @@ function separateOpenAIOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		reasoningEffort,
 		structuredOutputName: _structuredOutputName,
+		reasoning_effort: _reasoning_effort,
+		max_completion_tokens: _max_completion_tokens,
 		...rest
-	} = options as LLMOptions & { structuredOutputName?: string };
+	} = options as LLMOptions & {
+		structuredOutputName?: string;
+		reasoning_effort?: string;
+		max_completion_tokens?: number;
+	};
 
 	const known = {
 		model,
@@ -54,6 +61,7 @@ function separateOpenAIOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		reasoningEffort,
 		structuredOutputName: _structuredOutputName,
 	};
 
@@ -61,6 +69,15 @@ function separateOpenAIOptions(options: LLMOptions = {}) {
 		known,
 		rest,
 	};
+}
+
+function openAIReasoningEffort(
+	reasoningEffort: LLMOptions['reasoningEffort']
+): { reasoning_effort?: string } {
+	if (reasoningEffort === undefined) {
+		return {};
+	}
+	return { reasoning_effort: reasoningEffort };
 }
 
 /**
@@ -221,13 +238,14 @@ export class UbcLlmSandboxProvider implements Provider {
 				messages: openaiMessages,
 				temperature: options?.temperature,
 				max_tokens: options?.maxTokens,
+				...openAIReasoningEffort(options?.reasoningEffort),
 				response_format:
 					options?.responseFormat === 'json'
 						? { type: 'json_object' }
 						: undefined,
 				stream: false,
 				...rest,
-			});
+			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
 
 			return this.normalizeResponse(response);
 		} catch (error) {
@@ -299,9 +317,10 @@ export class UbcLlmSandboxProvider implements Provider {
 				messages: openaiMessages,
 				temperature: options?.temperature,
 				max_tokens: options?.maxTokens,
+				...openAIReasoningEffort(options?.reasoningEffort),
 				stream: true,
 				...rest,
-			});
+			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
 
 			let fullContent = '';
 			let finalResponse: OpenAI.Chat.Completions.ChatCompletion | null = null;
