@@ -25,6 +25,7 @@ import {
 	LLMResponse,
 	LLMStructuredResponse,
 	Message,
+	ReasoningEffort,
 	StructuredOutputOptions,
 	EmbeddingOptions,
 	EmbeddingResponse,
@@ -51,6 +52,7 @@ function separateOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		reasoningEffort,
 		// OpenAI-only hint; Anthropic ignores it but we strip so it never lands in `...rest` and confuses the SDK.
 		structuredOutputName: _structuredOutputName,
 		...rest
@@ -63,10 +65,31 @@ function separateOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		reasoningEffort,
 		structuredOutputName: _structuredOutputName,
 	};
 
 	return { known, rest };
+}
+
+/** Maps toolkit `reasoningEffort` to Anthropic thinking/output_config without rewriting the value. */
+function anthropicReasoningFields(
+	reasoningEffort?: ReasoningEffort
+): Pick<MessageCreateParamsNonStreaming, 'thinking' | 'output_config'> {
+	if (!reasoningEffort) {
+		return {};
+	}
+	if (reasoningEffort === 'none') {
+		return { thinking: { type: 'disabled' } };
+	}
+	return {
+		thinking: { type: 'adaptive' },
+		output_config: {
+			effort: reasoningEffort as NonNullable<
+				MessageCreateParamsNonStreaming['output_config']
+			>['effort'],
+		},
+	};
 }
 
 export class AnthropicProvider implements Provider {
@@ -170,6 +193,7 @@ export class AnthropicProvider implements Provider {
 
 		try {
 			const { rest } = separateOptions(options);
+			const reasoningFields = anthropicReasoningFields(options?.reasoningEffort);
 
 			// Construct parameters for the Anthropic API call.
 			const params: MessageCreateParamsNonStreaming = {
@@ -182,6 +206,7 @@ export class AnthropicProvider implements Provider {
 				system: systemPrompt,
 				stream: false,
 				...rest,
+				...reasoningFields,
 				// TODO: Potentially map other options like stop_sequences if added to LLMOptions
 			};
 
@@ -221,6 +246,7 @@ export class AnthropicProvider implements Provider {
 
 		try {
 			const { rest } = separateOptions(options);
+			const reasoningFields = anthropicReasoningFields(options?.reasoningEffort);
 
 			// `parse` validates `parsed_output` against the Zod schema server-side (when supported); we still null-check below.
 			const response = await this.client.messages.parse({
@@ -230,10 +256,14 @@ export class AnthropicProvider implements Provider {
 				temperature: options?.temperature,
 				system: systemPrompt,
 				stream: false,
+				...rest,
 				output_config: {
+					...(reasoningFields.output_config ?? {}),
 					format: zodOutputFormat(schema),
 				},
-				...rest,
+				...(reasoningFields.thinking
+					? { thinking: reasoningFields.thinking }
+					: {}),
 			});
 
 			// Successful HTTP does not guarantee parsed_output (e.g. stop before structured body); treat as hard failure for callers expecting T.
@@ -289,6 +319,7 @@ export class AnthropicProvider implements Provider {
 
 		let fullContent = ''; // Accumulates the full response text from stream chunks.
 		const { rest } = separateOptions(options);
+		const reasoningFields = anthropicReasoningFields(options?.reasoningEffort);
 
 		try {
 			// Construct parameters, ensuring stream is set to true.
@@ -300,6 +331,7 @@ export class AnthropicProvider implements Provider {
 				system: systemPrompt,
 				stream: true,
 				...rest,
+				...reasoningFields,
 			};
 
 			const stream = await this.client.messages.create(params);
