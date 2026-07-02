@@ -200,6 +200,38 @@ streamChat();
 
 See **[Providers & Models](#providers--models)** for a per-provider table of who supports structured output.
 
+### Images (multi-modal input)
+
+Any message can carry images for vision-capable models by adding an `images`
+array alongside `content`. Each image is base64-encoded bytes plus a MIME type:
+
+```typescript
+import fs from 'fs';
+
+const base64 = fs.readFileSync('chart.png').toString('base64');
+
+const response = await llm.sendConversation(
+	[
+		{
+			role: 'user',
+			content: 'Describe this chart in two sentences.',
+			images: [{ data: base64, mimeType: 'image/png' }],
+		},
+	],
+	{ model: 'gpt-5-nano' }
+);
+```
+
+- `data` is raw base64 **without** a `data:` URI prefix (e.g.
+  `buffer.toString('base64')`); each provider wraps it as needed.
+- Messages without `images` are sent as a plain text string exactly as before —
+  this is fully backwards compatible.
+- Images combine with **structured output**, so you can ask a vision model to
+  return Zod-validated JSON describing an image.
+- Supported on **OpenAI**, **UBC LLM Sandbox** (OpenAI-compatible), **Anthropic**,
+  and **Ollama** (vision-capable models such as `llava`). Sending images to a
+  model that can't accept them surfaces the provider's own error.
+
 ### Using Provider-Specific Options
 
 The `LLMOptions` object is designed to be extensible, allowing you to pass any parameter that a specific provider's API supports. The module will pass these options through to the underlying SDK.

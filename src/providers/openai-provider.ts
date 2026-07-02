@@ -68,6 +68,29 @@ function separateOpenAIOptions(options: LLMOptions = {}) {
 	return { known, rest };
 }
 
+/**
+ * Message content for the OpenAI SDK: a plain string, or a multi-part array
+ * (text + base64 `image_url` parts) when the message carries images.
+ */
+function toOpenAIContent(
+	msg: Message
+): string | OpenAI.Chat.Completions.ChatCompletionContentPart[] {
+	if (!msg.images || msg.images.length === 0) {
+		return msg.content;
+	}
+	const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+	if (msg.content) {
+		parts.push({ type: 'text', text: msg.content });
+	}
+	for (const image of msg.images) {
+		parts.push({
+			type: 'image_url',
+			image_url: { url: `data:${image.mimeType};base64,${image.data}` },
+		});
+	}
+	return parts;
+}
+
 export class OpenAIProvider implements Provider {
 	private client: OpenAI;
 	private logger: LoggerInterface;
@@ -156,8 +179,8 @@ export class OpenAIProvider implements Provider {
 			// Convert to OpenAI format
 			const openaiMessages = messages.map((msg) => ({
 				role: msg.role,
-				content: msg.content,
-			}));
+				content: toOpenAIContent(msg),
+			})) as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
 
 			// Avoid duplicating system: if the transcript already has system, trust it; else prepend options.systemPrompt once.
 			if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
@@ -208,8 +231,8 @@ export class OpenAIProvider implements Provider {
 
 			const openaiMessages = messages.map((msg) => ({
 				role: msg.role,
-				content: msg.content,
-			}));
+				content: toOpenAIContent(msg),
+			})) as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
 
 			if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
 				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
@@ -285,8 +308,8 @@ export class OpenAIProvider implements Provider {
 
 			const openaiMessages = messages.map((msg) => ({
 				role: msg.role,
-				content: msg.content,
-			}));
+				content: toOpenAIContent(msg),
+			})) as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
 
 			if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
 				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });

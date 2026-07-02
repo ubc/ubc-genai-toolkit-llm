@@ -64,6 +64,29 @@ function separateOpenAIOptions(options: LLMOptions = {}) {
 }
 
 /**
+ * Message content for the OpenAI-compatible SDK: a plain string, or a multi-part
+ * array (text + base64 `image_url` parts) when the message carries images.
+ */
+function toOpenAIContent(
+	msg: Message
+): string | OpenAI.Chat.Completions.ChatCompletionContentPart[] {
+	if (!msg.images || msg.images.length === 0) {
+		return msg.content;
+	}
+	const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+	if (msg.content) {
+		parts.push({ type: 'text', text: msg.content });
+	}
+	for (const image of msg.images) {
+		parts.push({
+			type: 'image_url',
+			image_url: { url: `data:${image.mimeType};base64,${image.data}` },
+		});
+	}
+	return parts;
+}
+
+/**
  * Provides access to Large Language Models (LLMs) via the UBC LLM Sandbox service.
  *
  * This class implements the `Provider` interface, offering methods to interact
@@ -206,8 +229,8 @@ export class UbcLlmSandboxProvider implements Provider {
 			// Convert to OpenAI format
 			const openaiMessages = messages.map((msg) => ({
 				role: msg.role,
-				content: msg.content,
-			}));
+				content: toOpenAIContent(msg),
+			})) as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
 
 			// Handle system prompt if not already in messages
 			if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
@@ -284,8 +307,8 @@ export class UbcLlmSandboxProvider implements Provider {
 			// Convert to OpenAI format
 			const openaiMessages = messages.map((msg) => ({
 				role: msg.role,
-				content: msg.content,
-			}));
+				content: toOpenAIContent(msg),
+			})) as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
 
 			// Handle system prompt if not already in messages
 			if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {

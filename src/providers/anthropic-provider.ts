@@ -37,6 +37,7 @@ import type {
 	MessageParam,
 	MessageCreateParamsNonStreaming,
 	MessageCreateParamsStreaming,
+	ContentBlockParam,
 } from '@anthropic-ai/sdk/resources/messages';
 import type { ModelInfo } from '@anthropic-ai/sdk/resources/models';
 
@@ -67,6 +68,36 @@ function separateOptions(options: LLMOptions = {}) {
 	};
 
 	return { known, rest };
+}
+
+/**
+ * Message content for the Anthropic SDK: a plain string, or a content-block
+ * array (text block + base64 `image` blocks) when the message carries images.
+ */
+function toAnthropicContent(msg: Message): string | ContentBlockParam[] {
+	if (!msg.images || msg.images.length === 0) {
+		return msg.content;
+	}
+	const blocks: ContentBlockParam[] = [];
+	if (msg.content) {
+		blocks.push({ type: 'text', text: msg.content });
+	}
+	for (const image of msg.images) {
+		blocks.push({
+			type: 'image',
+			source: {
+				type: 'base64',
+				// Standard image MIME strings; Anthropic validates server-side.
+				media_type: image.mimeType as
+					| 'image/jpeg'
+					| 'image/png'
+					| 'image/gif'
+					| 'image/webp',
+				data: image.data,
+			},
+		});
+	}
+	return blocks;
 }
 
 export class AnthropicProvider implements Provider {
@@ -165,7 +196,7 @@ export class AnthropicProvider implements Provider {
 			.filter((msg): msg is Message & { role: 'user' | 'assistant' } => msg.role !== 'system')
 			.map((msg) => ({
 				role: msg.role,
-				content: msg.content,
+				content: toAnthropicContent(msg),
 			}));
 
 		try {
@@ -216,7 +247,7 @@ export class AnthropicProvider implements Provider {
 			.filter((msg): msg is Message & { role: 'user' | 'assistant' } => msg.role !== 'system')
 			.map((msg) => ({
 				role: msg.role,
-				content: msg.content,
+				content: toAnthropicContent(msg),
 			}));
 
 		try {
@@ -284,7 +315,7 @@ export class AnthropicProvider implements Provider {
 			.filter((msg): msg is Message & { role: 'user' | 'assistant' } => msg.role !== 'system')
 			.map((msg) => ({
 				role: msg.role,
-				content: msg.content,
+				content: toAnthropicContent(msg),
 			}));
 
 		let fullContent = ''; // Accumulates the full response text from stream chunks.

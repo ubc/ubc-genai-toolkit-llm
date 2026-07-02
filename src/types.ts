@@ -41,6 +41,28 @@ export interface LLMConfig extends ModuleConfig {
 }
 
 /**
+ * An image attached to a {@link Message} for multi-modal (vision) requests.
+ *
+ * Provider support: OpenAI, UBC LLM Sandbox (OpenAI-compatible), Anthropic, and
+ * Ollama (vision-capable models). Providers that receive images for a model that
+ * cannot accept them will surface the underlying provider error.
+ */
+export interface MessageImage {
+	/**
+	 * Base64-encoded image bytes, WITHOUT a `data:` URI prefix
+	 * (e.g. the output of `buffer.toString('base64')`). Providers add any
+	 * required wrapping (OpenAI/Anthropic data URLs, etc.) themselves.
+	 */
+	data: string;
+
+	/**
+	 * The image MIME type, e.g. `'image/png'`, `'image/jpeg'`, `'image/gif'`,
+	 * or `'image/webp'`.
+	 */
+	mimeType: string;
+}
+
+/**
  * Message in a conversation
  */
 export interface Message {
@@ -53,6 +75,15 @@ export interface Message {
 	 * The content of the message
 	 */
 	content: string;
+
+	/**
+	 * Optional images to send alongside `content` for multi-modal requests.
+	 * When present (and non-empty), providers build a multi-part message
+	 * combining the text `content` with each image. When omitted, the message
+	 * is sent as a plain text string exactly as before (fully backwards
+	 * compatible). Images are normally only meaningful on `user` messages.
+	 */
+	images?: MessageImage[];
 
 	/**
 	 * Optional timestamp
