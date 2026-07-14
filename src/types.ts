@@ -1,4 +1,5 @@
 import { ModuleConfig } from 'ubc-genai-toolkit-core';
+import type { ZodType } from 'zod';
 
 /**
  * LLM provider types
@@ -41,6 +42,61 @@ export interface LLMConfig extends ModuleConfig {
 }
 
 /**
+ * Why generation ended, normalized across providers.
+ *
+ * - `stop` — the model finished naturally.
+ * - `tool_calls` — the model is requesting one or more tool invocations
+ *   (see {@link LLMResponse.toolCalls}); the caller should execute them and
+ *   send the results back as `role: 'tool'` messages.
+ * - `length` — the token limit was hit; output may be truncated.
+ * - `other` — any provider-specific reason not covered above (details are
+ *   usually preserved in `LLMResponse.metadata`).
+ */
+export type StopReason = 'stop' | 'tool_calls' | 'length' | 'other';
+
+/**
+ * A tool the model may call, in provider-neutral form.
+ *
+ * Each provider converts `parameters` (a Zod schema) to JSON Schema via
+ * `zod-to-json-schema` and translates the definition into its native
+ * function-calling format. The `description` is shown to the model and is
+ * the primary signal for when the tool gets called — write it carefully.
+ */
+export interface ToolDefinition {
+	/** Unique tool name, e.g. `'calculator'`. */
+	name: string;
+
+	/** What the tool does and when to use it — shown to the model. */
+	description: string;
+
+	/** Zod schema describing the tool's arguments (typically `z.object({...})`). */
+	parameters: ZodType;
+}
+
+/**
+ * A tool invocation requested by the model.
+ *
+ * Appears on assistant messages ({@link Message.toolCalls}) and on
+ * {@link LLMResponse.toolCalls}. The caller executes the named tool with
+ * `arguments` and reports the outcome in a `role: 'tool'` message whose
+ * {@link Message.toolCallId} equals this call's `id`.
+ */
+export interface ToolCall {
+	/**
+	 * Identifier linking this request to its result message. Provider-assigned
+	 * where available (OpenAI, Anthropic); synthesized for providers without
+	 * ids (Ollama).
+	 */
+	id: string;
+
+	/** Name of the tool being called. */
+	name: string;
+
+	/** Parsed JSON arguments for the call. */
+	arguments: Record<string, unknown>;
+}
+
+/**
  * An image attached to a {@link Message} for multi-modal (vision) requests.
  *
  * Provider support: OpenAI, UBC LLM Sandbox (OpenAI-compatible), Anthropic, and
@@ -67,9 +123,14 @@ export interface MessageImage {
  */
 export interface Message {
 	/**
-	 * The role of the message sender
+	 * The role of the message sender.
+	 *
+	 * `'tool'` carries the result of a tool invocation back to the model: it is
+	 * the application reporting a tool's output, not a user or assistant
+	 * utterance. Tool messages must set {@link toolCallId}. Existing code that
+	 * never uses tools never sees this role.
 	 */
-	role: 'user' | 'assistant' | 'system';
+	role: 'user' | 'assistant' | 'system' | 'tool';
 
 	/**
 	 * The content of the message
@@ -84,6 +145,18 @@ export interface Message {
 	 * compatible). Images are normally only meaningful on `user` messages.
 	 */
 	images?: MessageImage[];
+
+	/**
+	 * Tool invocations requested by the model. Present only on `assistant`
+	 * messages replayed into history during a tool-calling loop (the message's
+	 * `content` may be an empty string in that case).
+	 */
+	toolCalls?: ToolCall[];
+
+	/**
+	 * For `role: 'tool'` messages: the {@link ToolCall.id} this result answers.
+	 */
+	toolCallId?: string;
 
 	/**
 	 * Optional timestamp
@@ -126,6 +199,21 @@ export interface LLMOptions {
 	responseFormat?: 'json' | 'text';
 
 	/**
+	 * Tools the model may call. When present, providers translate these into
+	 * their native function-calling format. Responses may then carry
+	 * {@link LLMResponse.toolCalls}.
+	 */
+	tools?: ToolDefinition[];
+
+	/**
+	 * How eagerly the model should call tools. `'auto'` (default) lets the
+	 * model decide, `'required'` forces at least one call, `'none'` disables
+	 * calling. Providers without a native equivalent ignore this and log a
+	 * debug message.
+	 */
+	toolChoice?: 'auto' | 'required' | 'none';
+
+	/**
 	 * Additional provider-specific options
 	 */
 	[key: string]: any;
@@ -149,6 +237,16 @@ export interface LLMResponse {
 	 * The generated content
 	 */
 	content: string;
+
+	/**
+	 * Tool invocations requested by the model, if any. When set, the caller
+	 * should execute each tool and send the results back as `role: 'tool'`
+	 * messages, then call the LLM again.
+	 */
+	toolCalls?: ToolCall[];
+
+	/** Why generation ended, normalized across providers. */
+	stopReason?: StopReason;
 
 	/**
 	 * The model that generated the content

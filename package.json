@@ -23,7 +23,8 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",
@@ -34,8 +35,9 @@
     "zod-to-json-schema": "^3.24.5"
   },
   "devDependencies": {
+    "@types/node": "^20.12.12",
     "typescript": "^5.8.2",
-    "@types/node": "^20.12.12"
+    "vitest": "^4.1.10"
   },
   "publishConfig": {
     "access": "public"
