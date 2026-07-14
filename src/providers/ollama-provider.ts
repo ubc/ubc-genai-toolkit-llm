@@ -34,6 +34,13 @@ import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
 import { Ollama, EmbedResponse } from 'ollama';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { ZodType } from 'zod';
+import {
+	ollamaImages,
+	toOllamaMessages,
+	toOllamaTools,
+	fromOllamaToolCalls,
+	mapOllamaDoneReason,
+} from './ollama-mapping';
 
 /**
  * Pulls toolkit-managed fields off `LLMOptions`, maps temperature / maxTokens into Ollama’s
@@ -48,6 +55,10 @@ function separateOptions(options: LLMOptions = {}) {
 		responseFormat,
 		stream,
 		// Not an Ollama generate field; strip so it cannot be forwarded inside `rest`.
+		// Toolkit-managed: tools are translated natively; Ollama has no toolChoice
+		// equivalent. Both are stripped so they never reach `rest`/`finalOptions`.
+		tools,
+		toolChoice,
 		structuredOutputName: _structuredOutputName,
 		...rest
 	} = options as LLMOptions & { structuredOutputName?: string };
@@ -60,6 +71,8 @@ function separateOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		tools,
+		toolChoice,
 		structuredOutputName: _structuredOutputName,
 	};
 
@@ -73,16 +86,6 @@ function separateOptions(options: LLMOptions = {}) {
 		ollamaSpecific,
 		rest,
 	};
-}
-
-/**
- * Ollama attaches images to a message via an `images` field of base64 strings
- * (vision-capable models). Returns an empty object for text-only messages.
- */
-function ollamaImages(msg: Message): { images?: string[] } {
-	return msg.images && msg.images.length > 0
-		? { images: msg.images.map((image) => image.data) }
-		: {};
 }
 
 export class OllamaProvider implements Provider {
@@ -177,11 +180,7 @@ export class OllamaProvider implements Provider {
 
 		try {
 			// Convert the messages to the Ollama format
-			const ollamaMessages = messages.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-				...ollamaImages(msg),
-			}));
+			const ollamaMessages = toOllamaMessages(messages);
 
 			// Separate known, Ollama-specific, and passthrough options
 			const { ollamaSpecific, rest } = separateOptions(options);
@@ -194,6 +193,14 @@ export class OllamaProvider implements Provider {
 				ollamaMessages.unshift({ role: 'system', content: options.systemPrompt });
 			}
 
+			// Ollama has no tool_choice equivalent; honor the contract by logging, not failing.
+			if (options?.toolChoice) {
+				this.logger.debug(
+					'Ollama does not support toolChoice; ignoring.',
+					{ toolChoice: options.toolChoice }
+				);
+			}
+
 			// Use the stored client instance directly
 			const response = await this.client.chat({
 				model: model,
@@ -201,6 +208,10 @@ export class OllamaProvider implements Provider {
 				stream: false,
 				// `format: 'json'` is Ollama's loose JSON mode; structured chat uses a JSON Schema object instead (see sendStructuredConversation).
 				format: options?.responseFormat === 'json' ? 'json' : undefined,
+				tools:
+					options?.tools && options.tools.length > 0
+						? (toOllamaTools(options.tools) as never)
+						: undefined,
 				options: finalOptions,
 			});
 
@@ -227,6 +238,17 @@ export class OllamaProvider implements Provider {
 		schema: ZodType<T>,
 		options?: StructuredOutputOptions
 	): Promise<LLMStructuredResponse<T>> {
+		// Tools and structured output are mutually exclusive in 0.4.0: run the
+		// tool loop with sendConversation, reserve structured for the final turn.
+		// Thrown before the try so it propagates as-is.
+		if (options?.tools && options.tools.length > 0) {
+			throw new APIError(
+				'Tool calling is not supported with structured output; use sendConversation for the tool loop.',
+				400,
+				{ provider: 'ollama' }
+			);
+		}
+
 		const model = options?.model || this.defaultModel;
 		this.logger.debug('Sending structured conversation to Ollama', {
 			model,
@@ -235,11 +257,7 @@ export class OllamaProvider implements Provider {
 
 		try {
 			// Convert the messages to the Ollama format
-			const ollamaMessages = messages.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-				...ollamaImages(msg),
-			}));
+			const ollamaMessages = toOllamaMessages(messages);
 
 			// Separate known, Ollama-specific, and passthrough options
 			const { ollamaSpecific, rest } = separateOptions(options);
@@ -341,9 +359,20 @@ export class OllamaProvider implements Provider {
 			ollamaMessages.unshift({ role: 'system', content: options.systemPrompt });
 		}
 
+		if (options?.toolChoice) {
+			this.logger.debug(
+				'Ollama does not support toolChoice; ignoring.',
+				{ toolChoice: options.toolChoice }
+			);
+		}
+
 		let fullContent = '';
 		// Ollama may emit many chunks before `done`; keep the last `done` payload for timing/eval metadata on the final LLMResponse.
 		let finalResponseMetadata: Record<string, unknown> | null = null;
+		// Ollama sends tool calls whole (not fragmented); collect any that arrive across chunks.
+		const collectedToolCalls: Array<{
+			function: { name: string; arguments: Record<string, unknown> };
+		}> = [];
 
 		try {
 			const stream = await this.client.chat({
@@ -352,6 +381,10 @@ export class OllamaProvider implements Provider {
 				stream: true,
 				// Same as non-stream: JSON mode is separate from JSON Schema structured output.
 				format: options?.responseFormat === 'json' ? 'json' : undefined,
+				tools:
+					options?.tools && options.tools.length > 0
+						? (toOllamaTools(options.tools) as never)
+						: undefined,
 				options: finalOptions,
 			});
 
@@ -360,6 +393,9 @@ export class OllamaProvider implements Provider {
 				if (contentChunk) {
 					fullContent += contentChunk;
 					callback(contentChunk);
+				}
+				if (part.message?.tool_calls) {
+					collectedToolCalls.push(...part.message.tool_calls);
 				}
 				if (part.done) {
 					// Spread only defined fields so metadata stays small and JSON-serializable for downstream logging.
@@ -382,6 +418,13 @@ export class OllamaProvider implements Provider {
 
 			return {
 				content: fullContent,
+				toolCalls: fromOllamaToolCalls(
+					collectedToolCalls.length > 0 ? collectedToolCalls : undefined
+				),
+				stopReason: mapOllamaDoneReason(
+					finalResponseMetadata?.done_reason as string | undefined,
+					collectedToolCalls.length > 0
+				),
 				model: model,
 				usage: {
 					// Ollama reports eval counts, not tokenizer-based tokens; map into usage for a consistent shape with other providers.
@@ -467,7 +510,12 @@ export class OllamaProvider implements Provider {
 	 * @returns An `LLMResponse` object.
 	 */
 	private normalizeResponse(response: {
-		message?: { content?: string };
+		message?: {
+			content?: string;
+			tool_calls?: Array<{
+				function: { name: string; arguments: Record<string, unknown> };
+			}>;
+		};
 		model?: string;
 		done?: boolean;
 		done_reason?: string;
@@ -480,6 +528,11 @@ export class OllamaProvider implements Provider {
 	}, model: string): LLMResponse {
 		return {
 			content: response?.message?.content || '',
+			toolCalls: fromOllamaToolCalls(response?.message?.tool_calls),
+			stopReason: mapOllamaDoneReason(
+				response?.done_reason,
+				(response?.message?.tool_calls?.length ?? 0) > 0
+			),
 			// Non-stream final object may omit `model`; fall back to the request model string we passed in.
 			model: response?.model || model,
 			usage: {
