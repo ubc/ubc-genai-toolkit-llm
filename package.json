@@ -1,6 +1,6 @@
 {
   "name": "ubc-genai-toolkit-llm",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "LLM module for the UBC GenAI Toolkit, providing a unified interface for interacting with various large language models.",
   "homepage": "https://github.com/ubc/ubc-genai-toolkit-llm#readme",
   "bugs": {
