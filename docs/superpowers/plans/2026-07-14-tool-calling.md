@@ -2813,15 +2813,29 @@ Expected: build exits 0; all test files pass (`types`, `openai-compat-mapping`, 
 Run (from `example/`): `npm run build`
 Expected: exit 0 — the pre-existing example sources (`app.ts`, `structured-paragraph-demo.ts`), which know nothing about tools, compile unchanged against 0.4.0.
 
-- [ ] **Step 3: Live end-to-end run (requires credentials — coordinate with the user)**
+- [ ] **Step 3: Live end-to-end validation with the user (BLOCKING GATE)**
 
-From `example/` with a configured `.env` (any provider with a tool-capable model):
+This step validates the release against a real provider and is **not complete until real output has been observed** — yours or the user's. Never fake it, and never close the plan with this step merely "reported as pending".
+
+1. Check whether `example/.env` exists with provider credentials (any provider with a tool-capable model). If it does, run it yourself from `example/`:
 
 ```bash
 npm run tool-demo
 ```
 
-Expected: at least one `[tool call] calculator({"expression": ...})` line, a `[tool result] 127.05` (or equivalent), and a final assistant answer containing ~127. If no provider credentials are available in this environment, report that step 3 needs a manual run by the user — do not fake it.
+2. If there is no `.env` (or the run fails on authentication), **stop and ask the user** to either:
+   - add credentials to `example/.env` (variables documented in `example/src/config.ts`) so you can run it, or
+   - run the demo themselves and share the output — they can type `! cd example && npm run tool-demo` directly in this session so the output lands in the conversation.
+
+3. Validation criteria (all must appear in the observed output):
+   - at least one `[tool call] calculator({"expression": ...})` line — the model actually requested the tool;
+   - a matching `[tool result] 127.05` (or arithmetically equivalent) line — the toolkit executed it and fed it back;
+   - a final assistant answer containing ~127 — the model used the result;
+   - the closing "What an end user would see" section lists only `user:`/`assistant:` lines — `getDisplayMessages` filtered the tool traffic.
+
+4. If any criterion fails, treat it as a defect: debug and fix before proceeding (a model that answers without calling the tool may just need a more tool-capable model in `.env` — ask the user; wrong arithmetic or leaked tool messages are code bugs).
+
+Only after the criteria pass may Task 12 — and the plan — be marked complete.
 
 - [ ] **Step 4: Commit any final fixes and report**
 
