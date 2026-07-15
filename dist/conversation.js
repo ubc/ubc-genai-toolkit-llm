@@ -1,0 +1,93 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ConversationImpl = void 0;
+/**
+ * Implements the Conversation interface to manage a sequence of messages
+ * and facilitate interaction with a Large Language Model (LLM).
+ * It uses a ConversationFactory to handle the actual communication (sending/streaming)
+ * with the underlying LLM service.
+ */
+class ConversationImpl {
+    /**
+     * Creates an instance of ConversationImpl.
+     * @param {ConversationFactory} factory - The factory used to send/stream the conversation to the LLM.
+     */
+    constructor(factory) {
+        /** Stores the sequence of messages in the conversation. */
+        this.messages = [];
+        this.factory = factory;
+    }
+    /**
+     * Adds a new message to the conversation history.
+     * @param {'user' | 'assistant' | 'system'} role - The role of the message sender.
+     * @param {string} content - The textual content of the message.
+     */
+    addMessage(role, content) {
+        this.messages.push({
+            role,
+            content,
+            timestamp: new Date().toISOString(), // Record the time the message was added
+        });
+    }
+    /**
+     * Retrieves a copy of the current conversation history.
+     * @returns {Message[]} An array containing all messages in the conversation so far.
+     *                     Returns a shallow copy to prevent external modification of the internal state.
+     */
+    getHistory() {
+        // Return a shallow copy to prevent direct modification of the internal messages array
+        return [...this.messages];
+    }
+    /**
+     * Sends the entire conversation history to the LLM for a response.
+     * The LLM's response is then added to the history as an 'assistant' message.
+     * @param {LLMOptions} [options] - Optional parameters to customize the LLM request (e.g., temperature, max tokens).
+     * @returns {Promise<LLMResponse>} A promise that resolves with the LLM's response, including content and potentially other metadata.
+     */
+    async send(options) {
+        // Use the factory to send the conversation messages.
+        // Cast to 'any' temporarily as the specific methods (sendConversation, streamConversation)
+        // might not be explicitly defined on the ConversationFactory interface itself,
+        // but are expected to be implemented by the concrete factory provided.
+        const response = await this.factory.sendConversation(this.messages, options);
+        // Add the assistant's response to the conversation history
+        this.addMessage('assistant', response.content);
+        return response;
+    }
+    /**
+     * Sends the conversation history to the LLM and streams the response back.
+     * Chunks of the response are passed to the provided callback function as they arrive.
+     * The complete response is added to the history as an 'assistant' message once the stream finishes.
+     * @param {(chunk: string) => void} callback - A function to be called with each chunk of the streamed response.
+     * @param {LLMOptions} [options] - Optional parameters to customize the LLM request.
+     * @returns {Promise<LLMResponse>} A promise that resolves with the final LLM response object (containing the full content) once the stream is complete.
+     */
+    async stream(callback, options) {
+        let fullContent = '';
+        // Wrap the user's callback to accumulate the full response content
+        // while still forwarding individual chunks.
+        const wrappedCallback = (chunk) => {
+            fullContent += chunk;
+            callback(chunk); // Pass the chunk to the original callback
+        };
+        const response = await this.factory.streamConversation(this.messages, wrappedCallback, options);
+        // Although the response object from streamConversation likely contains the full content already,
+        // we add the message using the accumulated fullContent for consistency,
+        // ensuring the history reflects exactly what was streamed.
+        // Note: Depending on the implementation of streamConversation, response.content might be redundant here.
+        // However, adding the message based on accumulated chunks is safer.
+        this.addMessage('assistant', fullContent); // Use accumulated content
+        // It's assumed streamConversation returns a response object similar to sendConversation,
+        // potentially containing metadata even if content was streamed. Return this object.
+        return response;
+    }
+    async sendStructured(schema, options) {
+        // Use the factory to send the structured conversation.
+        const response = await this.factory.sendStructuredConversation(this.messages, schema, options);
+        // Add the assistant's response to the conversation history
+        this.addMessage('assistant', JSON.stringify(response.parsed));
+        return response;
+    }
+}
+exports.ConversationImpl = ConversationImpl;
+//# sourceMappingURL=conversation.js.map
