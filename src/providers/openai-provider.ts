@@ -33,48 +33,14 @@ import {
 	EmbeddingResponse,
 } from '../types';
 import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
-
-/**
- * Splits {@link LLMOptions} into fields we set explicitly on each request vs. passthrough `rest`.
- *
- * `rest` is spread into the SDK call so callers can pass supported OpenAI parameters not modeled
- * on `LLMOptions`, without colliding with toolkit-managed keys.
- */
-function separateOpenAIOptions(options: LLMOptions = {}) {
-	const {
-		model,
-		temperature,
-		maxTokens,
-		systemPrompt,
-		responseFormat,
-		stream,
-		reasoningEffort,
-		// Rename so it is not forwarded in `rest`; only structured calls need the name, and generic chat must not send it.
-		structuredOutputName: _structuredOutputName,
-		reasoning_effort: _reasoning_effort,
-		max_completion_tokens: _max_completion_tokens,
-		...rest
-	} = options as LLMOptions & {
-		structuredOutputName?: string;
-		reasoning_effort?: string;
-		max_completion_tokens?: number;
-	};
-
-	// Create a new object with the known options
-	const known = {
-		model,
-		temperature,
-		maxTokens,
-		systemPrompt,
-		responseFormat,
-		stream,
-		reasoningEffort,
-		structuredOutputName: _structuredOutputName,
-	};
-
-	// Return the known options and the rest of the options
-	return { known, rest };
-}
+import {
+	separateOpenAIOptions,
+	toOpenAIContent,
+	toOpenAIMessages,
+	toOpenAITools,
+	fromOpenAIToolCalls,
+	mapOpenAIFinishReason,
+} from './openai-compat-mapping';
 
 /** Maps toolkit `reasoningEffort` to OpenAI `reasoning_effort` without rewriting the value. */
 function openAIReasoningEffort(
@@ -171,11 +137,8 @@ export class OpenAIProvider implements Provider {
 		try {
 			const model = options?.model || this.defaultModel;
 
-			// Convert to OpenAI format
-			const openaiMessages = messages.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-			}));
+			// System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
+			const openaiMessages = toOpenAIMessages(messages);
 
 			// Avoid duplicating system: if the transcript already has system, trust it; else prepend options.systemPrompt once.
 			if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
@@ -197,6 +160,12 @@ export class OpenAIProvider implements Provider {
 					options?.responseFormat === 'json'
 						? { type: 'json_object' }
 						: undefined,
+				// Tool calling: translate toolkit definitions into OpenAI function tools.
+				tools:
+					options?.tools && options.tools.length > 0
+						? toOpenAITools(options.tools)
+						: undefined,
+				tool_choice: options?.toolChoice,
 				// Explicit false: callers might pass `stream` in `rest`; we need a non-streaming completion for normalizeResponse.
 				stream: false,
 				...rest,
@@ -222,13 +191,22 @@ export class OpenAIProvider implements Provider {
 		schema: ZodType<T>,
 		options?: StructuredOutputOptions
 	): Promise<LLMStructuredResponse<T>> {
+		// Tools and structured output are mutually exclusive in 0.4.0: run the
+		// tool loop with sendConversation, reserve structured for the final turn.
+		// Thrown before the try so it propagates as-is; the catch's handleError
+		// only preserves OpenAI.APIError and would otherwise mask this message.
+		if (options?.tools && options.tools.length > 0) {
+			throw new APIError(
+				'Tool calling is not supported with structured output; use sendConversation for the tool loop.',
+				400,
+				{ provider: 'openai' }
+			);
+		}
+
 		try {
 			const model = options?.model || this.defaultModel;
 
-			const openaiMessages = messages.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-			}));
+			const openaiMessages = toOpenAIMessages(messages);
 
 			if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
 				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
@@ -303,10 +281,7 @@ export class OpenAIProvider implements Provider {
 		try {
 			const model = options?.model || this.defaultModel;
 
-			const openaiMessages = messages.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-			}));
+			const openaiMessages = toOpenAIMessages(messages);
 
 			if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
 				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
@@ -320,22 +295,63 @@ export class OpenAIProvider implements Provider {
 				temperature: options?.temperature,
 				max_tokens: options?.maxTokens,
 				...openAIReasoningEffort(options?.reasoningEffort),
+				// Tool calling: translate toolkit definitions into OpenAI function tools.
+				tools:
+					options?.tools && options.tools.length > 0
+						? toOpenAITools(options.tools)
+						: undefined,
+				tool_choice: options?.toolChoice,
 				stream: true,
 				...rest,
 			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
 
 			let fullContent = '';
+			// Tool-call deltas arrive fragmented across chunks, keyed by index;
+			// accumulate here and surface complete calls only on the final response.
+			const toolCallAcc: Array<{ id?: string; name?: string; args: string }> = [];
+			let finishReason: string | null | undefined;
+
 			for await (const chunk of stream) {
-				const content = chunk.choices[0]?.delta?.content || '';
+				const choice = chunk.choices[0];
+				const content = choice?.delta?.content || '';
 				// Skip empty deltas so callers are not spammed; OpenAI may emit choice/metadata-only chunks.
 				if (content) {
 					fullContent += content;
 					callback(content);
 				}
+				if (choice?.delta?.tool_calls) {
+					for (const deltaCall of choice.delta.tool_calls) {
+						const i = deltaCall.index;
+						toolCallAcc[i] ??= { args: '' };
+						if (deltaCall.id) toolCallAcc[i].id = deltaCall.id;
+						if (deltaCall.function?.name) {
+							toolCallAcc[i].name = (toolCallAcc[i].name ?? '') + deltaCall.function.name;
+						}
+						if (deltaCall.function?.arguments) {
+							toolCallAcc[i].args += deltaCall.function.arguments;
+						}
+					}
+				}
+				if (choice?.finish_reason) {
+					finishReason = choice.finish_reason;
+				}
 			}
+
+			const toolCalls =
+				toolCallAcc.length > 0
+					? fromOpenAIToolCalls({
+						tool_calls: toolCallAcc.map((acc, i) => ({
+							id: acc.id ?? `call_${i}`,
+							type: 'function',
+							function: { name: acc.name ?? '', arguments: acc.args || '{}' },
+						})),
+					})
+					: undefined;
 
 			return {
 				content: fullContent,
+				toolCalls,
+				stopReason: mapOpenAIFinishReason(finishReason),
 				model: model,
 				metadata: { provider: 'openai' },
 			};
@@ -386,9 +402,12 @@ export class OpenAIProvider implements Provider {
 	private normalizeResponse(
 		response: OpenAI.Chat.Completions.ChatCompletion
 	): LLMResponse {
+		const choice = response.choices[0];
 		return {
 			// Empty string if the model returned only tool calls or an unexpected shape — keeps LLMResponse.content always a string.
-			content: response.choices[0]?.message?.content || '',
+			content: choice?.message?.content || '',
+			toolCalls: fromOpenAIToolCalls(choice?.message),
+			stopReason: mapOpenAIFinishReason(choice?.finish_reason),
 			model: response.model,
 			usage: {
 				promptTokens: response.usage?.prompt_tokens,

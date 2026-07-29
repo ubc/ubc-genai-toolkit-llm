@@ -38,8 +38,17 @@ import type {
 	MessageParam,
 	MessageCreateParamsNonStreaming,
 	MessageCreateParamsStreaming,
+	ContentBlockParam,
 } from '@anthropic-ai/sdk/resources/messages';
 import type { ModelInfo } from '@anthropic-ai/sdk/resources/models';
+import {
+	toAnthropicContent,
+	toAnthropicMessages,
+	toAnthropicTools,
+	toAnthropicToolChoice,
+	fromAnthropicToolUse,
+	mapAnthropicStopReason,
+} from './anthropic-mapping';
 
 /**
  * Splits {@link LLMOptions} into known toolkit fields vs `rest` spread onto Anthropic requests.
@@ -53,6 +62,9 @@ function separateOptions(options: LLMOptions = {}) {
 		responseFormat,
 		stream,
 		reasoningEffort,
+		// Toolkit-managed: translated into Anthropic's native tool params, not forwarded raw in `...rest`.
+		tools,
+		toolChoice,
 		// OpenAI-only hint; Anthropic ignores it but we strip so it never lands in `...rest` and confuses the SDK.
 		structuredOutputName: _structuredOutputName,
 		...rest
@@ -66,6 +78,8 @@ function separateOptions(options: LLMOptions = {}) {
 		responseFormat,
 		stream,
 		reasoningEffort,
+		tools,
+		toolChoice,
 		structuredOutputName: _structuredOutputName,
 	};
 
@@ -184,12 +198,8 @@ export class AnthropicProvider implements Provider {
 		});
 
 		// Anthropic does not allow `system` inside `messages`; system-only instructions must use the top-level `system` field instead.
-		const anthropicMessages: MessageParam[] = messages
-			.filter((msg): msg is Message & { role: 'user' | 'assistant' } => msg.role !== 'system')
-			.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-			}));
+		// System filtering + tool_use / tool_result mapping live in anthropic-mapping.
+		const anthropicMessages: MessageParam[] = toAnthropicMessages(messages);
 
 		try {
 			const { rest } = separateOptions(options);
@@ -204,6 +214,11 @@ export class AnthropicProvider implements Provider {
 				temperature: options?.temperature,
 				// Pass the extracted system prompt directly to the 'system' parameter.
 				system: systemPrompt,
+				tools:
+					options?.tools && options.tools.length > 0
+						? toAnthropicTools(options.tools)
+						: undefined,
+				tool_choice: toAnthropicToolChoice(options?.toolChoice),
 				stream: false,
 				...rest,
 				...reasoningFields,
@@ -234,15 +249,23 @@ export class AnthropicProvider implements Provider {
 		schema: ZodType<T>,
 		options?: StructuredOutputOptions
 	): Promise<LLMStructuredResponse<T>> {
+		// Tools and structured output are mutually exclusive in 0.4.0: run the
+		// tool loop with sendConversation, reserve structured for the final turn.
+		// Thrown before the try so it propagates as-is rather than being logged
+		// and rewrapped by handleError.
+		if (options?.tools && options.tools.length > 0) {
+			throw new APIError(
+				'Tool calling is not supported with structured output; use sendConversation for the tool loop.',
+				400,
+				{ provider: 'anthropic' }
+			);
+		}
+
 		const model = options?.model || this.defaultModel;
 		const systemPrompt = options?.systemPrompt;
 
-		const anthropicMessages: MessageParam[] = messages
-			.filter((msg): msg is Message & { role: 'user' | 'assistant' } => msg.role !== 'system')
-			.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-			}));
+		// System filtering + tool_use / tool_result mapping live in anthropic-mapping.
+		const anthropicMessages: MessageParam[] = toAnthropicMessages(messages);
 
 		try {
 			const { rest } = separateOptions(options);
@@ -310,14 +333,14 @@ export class AnthropicProvider implements Provider {
 		});
 
 		// Filter system messages and map roles, same as sendConversation.
-		const anthropicMessages: MessageParam[] = messages
-			.filter((msg): msg is Message & { role: 'user' | 'assistant' } => msg.role !== 'system')
-			.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-			}));
+		// System filtering + tool_use / tool_result mapping live in anthropic-mapping.
+		const anthropicMessages: MessageParam[] = toAnthropicMessages(messages);
 
 		let fullContent = ''; // Accumulates the full response text from stream chunks.
+		// tool_use inputs stream as partial JSON keyed by block index; buffer
+		// them here and parse only when the stream completes.
+		const toolAccByIndex = new Map<number, { id: string; name: string; json: string }>();
+		let rawStopReason: string | null | undefined;
 		const { rest } = separateOptions(options);
 		const reasoningFields = anthropicReasoningFields(options?.reasoningEffort);
 
@@ -329,6 +352,11 @@ export class AnthropicProvider implements Provider {
 				max_tokens: options?.maxTokens || 4096,
 				temperature: options?.temperature,
 				system: systemPrompt,
+				tools:
+					options?.tools && options.tools.length > 0
+						? toAnthropicTools(options.tools)
+						: undefined,
+				tool_choice: toAnthropicToolChoice(options?.toolChoice),
 				stream: true,
 				...rest,
 				...reasoningFields,
@@ -338,26 +366,58 @@ export class AnthropicProvider implements Provider {
 
 			// Process the stream events asynchronously.
 			for await (const event of stream) {
-				// Ignore tool deltas, thinking blocks, etc.: we only stitch plain assistant text for the streaming callback contract.
 				if (
-					event.type === 'content_block_delta' &&
-					event.delta.type === 'text_delta'
+					event.type === 'content_block_start' &&
+					event.content_block.type === 'tool_use'
 				) {
-					const chunk = event.delta.text;
-					fullContent += chunk;
-					callback(chunk); // Invoke the callback with the new chunk.
+					toolAccByIndex.set(event.index, {
+						id: event.content_block.id,
+						name: event.content_block.name,
+						json: '',
+					});
+				} else if (event.type === 'content_block_delta') {
+					if (event.delta.type === 'text_delta') {
+						const chunk = event.delta.text;
+						fullContent += chunk;
+						callback(chunk); // Invoke the callback with the new chunk.
+					} else if (event.delta.type === 'input_json_delta') {
+						const acc = toolAccByIndex.get(event.index);
+						if (acc) {
+							acc.json += event.delta.partial_json;
+						}
+					}
+				} else if (event.type === 'message_delta') {
+					rawStopReason = event.delta.stop_reason ?? rawStopReason;
 				}
-				// Note: Other events like 'message_start', 'message_delta', 'message_stop'
-				// are available but not used here to keep the implementation focused on text streaming.
 				// Usage information is typically not fully available until the 'message_stop' event in Anthropic's stream,
 				// so we return undefined usage for simplicity, matching Ollama provider behavior.
 			}
 
 			this.logger.debug('Anthropic stream finished');
 
+			const accumulated = [...toolAccByIndex.values()];
+			const toolCalls =
+				accumulated.length > 0
+					? accumulated.map((acc) => {
+						let args: Record<string, unknown>;
+						try {
+							args = acc.json ? JSON.parse(acc.json) : {};
+						} catch {
+							throw new APIError(
+								`Model returned invalid JSON arguments for tool '${acc.name}'.`,
+								502,
+								{ provider: 'anthropic', tool: acc.name }
+							);
+						}
+						return { id: acc.id, name: acc.name, arguments: args };
+					})
+					: undefined;
+
 			// Return the final response structure after the stream is complete.
 			return {
 				content: fullContent,
+				toolCalls,
+				stopReason: mapAnthropicStopReason(rawStopReason),
 				model: model,
 				usage: {
 					// Stream end events can carry usage; we leave these undefined to keep the stream path simple unless we subscribe to more event types.
@@ -413,6 +473,12 @@ export class AnthropicProvider implements Provider {
 
 		return {
 			content: textContent,
+			toolCalls: fromAnthropicToolUse(
+				// Cast via unknown: this SDK's ContentBlock union (e.g. ContainerUploadBlock)
+				// lacks an index signature, so a direct assertion is rejected.
+				response.content as unknown as Array<{ type: string; [key: string]: unknown }>
+			),
+			stopReason: mapAnthropicStopReason(response.stop_reason),
 			model: response.model,
 			usage: {
 				promptTokens: promptTokens,

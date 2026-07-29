@@ -223,6 +223,111 @@ await llm.sendMessage('Explain quicksort.', {
 
 On **Anthropic**, adaptive models (Sonnet 4.6+, Opus 4.7+, Sonnet 5) receive `thinking: { type: 'adaptive' }` plus `output_config.effort`. Older models fall back to approximate `budget_tokens` tiers. On **Ollama**, `think` is sent as a top-level chat field (`false` or `'low'`/`'medium'`/`'high'`/`'max'`). Model support varies — some Ollama models ignore `think: false`.
 
+### Images (multi-modal input)
+
+Any message can carry images for vision-capable models by adding an `images`
+array alongside `content`. Each image is base64-encoded bytes plus a MIME type:
+
+```typescript
+import fs from 'fs';
+
+const base64 = fs.readFileSync('chart.png').toString('base64');
+
+const response = await llm.sendConversation(
+	[
+		{
+			role: 'user',
+			content: 'Describe this chart in two sentences.',
+			images: [{ data: base64, mimeType: 'image/png' }],
+		},
+	],
+	{ model: 'gpt-5-nano' }
+);
+```
+
+- `data` is raw base64 **without** a `data:` URI prefix (e.g.
+  `buffer.toString('base64')`); each provider wraps it as needed.
+- Messages without `images` are sent as a plain text string exactly as before —
+  this is fully backwards compatible.
+- Images combine with **structured output**, so you can ask a vision model to
+  return Zod-validated JSON describing an image.
+- Supported on **OpenAI**, **UBC LLM Sandbox** (OpenAI-compatible), **Anthropic**,
+  and **Ollama** (vision-capable models such as `llava`). Sending images to a
+  model that can't accept them surfaces the provider's own error.
+
+### Tool Calling
+
+Tools let the model request that *your code* run something (a calculation, a
+lookup) and then continue with the result. A tool is a name, a description the
+model reads, and a Zod schema for its arguments:
+
+```typescript
+import { z } from 'zod';
+import { LLMModule, Message, ToolDefinition } from 'ubc-genai-toolkit-llm';
+
+const calculator: ToolDefinition = {
+	name: 'calculator',
+	description: 'Evaluate a basic arithmetic expression, e.g. "847 * 0.15".',
+	parameters: z.object({ expression: z.string() }),
+};
+```
+
+Tool calling is a loop: send the conversation with `tools`; if the response
+carries `toolCalls`, execute them, append the results as `role: 'tool'`
+messages, and call again. When the model stops calling tools, its text answer
+is ready:
+
+```typescript
+const messages: Message[] = [
+	{ role: 'user', content: 'What is 15% of 847?' },
+];
+
+for (let iteration = 0; iteration < 10; iteration++) {
+	const response = await llm.sendConversation(messages, {
+		tools: [calculator],
+	});
+
+	if (!response.toolCalls || response.toolCalls.length === 0) {
+		console.log(response.content); // "15% of 847 is 127.05."
+		break;
+	}
+
+	// Replay the assistant's tool request into history…
+	messages.push({
+		role: 'assistant',
+		content: response.content,
+		toolCalls: response.toolCalls,
+	});
+
+	// …execute each call and report the results.
+	for (const call of response.toolCalls) {
+		const result = myEvaluate(String(call.arguments.expression)); // your code
+		messages.push({
+			role: 'tool',
+			content: String(result),
+			toolCallId: call.id,
+		});
+	}
+}
+```
+
+Notes:
+
+-   `response.stopReason` is `'tool_calls'` when the model is requesting tools,
+    `'stop'` when it finished normally.
+-   Tool execution errors should be sent back as the tool message's `content`
+    (e.g. `"Error: division by zero"`) so the model can recover.
+-   `toolChoice: 'required'` forces at least one call; `'none'` disables
+    calling; Ollama ignores `toolChoice` (no native equivalent).
+-   `streamConversation` works with tools: text still streams via the callback,
+    and any tool calls appear on the final returned response.
+-   `sendStructuredConversation` does not accept `tools`.
+-   When rendering a conversation, use `getDisplayMessages(history)` to hide
+    tool machinery — end users should only see `user`/`assistant` text.
+
+The upcoming `ubc-genai-toolkit-agents` module automates this loop; use this
+API directly when you need full control.
+
 ### Using Provider-Specific Options
 
 The `LLMOptions` object is designed to be extensible, allowing you to pass any parameter that a specific provider's API supports. The module will pass these options through to the underlying SDK.

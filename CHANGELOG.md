@@ -2,6 +2,22 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-14
+
+### Added
+
+-   **Tool calling (function calling) across all providers.** `LLMOptions` accepts `tools` (an array of `ToolDefinition` — name, description, Zod `parameters` schema) and `toolChoice` (`'auto' | 'required' | 'none'`). When the model requests tool invocations, `LLMResponse.toolCalls` carries normalized `ToolCall` objects (`id`, `name`, parsed `arguments`) and `LLMResponse.stopReason` is `'tool_calls'`. Results are sent back as `role: 'tool'` messages with `toolCallId`. Supported by OpenAI, Anthropic, Ollama, and UBC LLM Sandbox providers, in both `sendConversation` and `streamConversation` (tool calls surface on the final streamed response, not mid-stream). `sendStructuredConversation` rejects `tools` (mutually exclusive in this release). Fully backwards compatible: code that never passes `tools` is unchanged.
+-   **`Message.role` widened** to include `'tool'`, plus optional `Message.toolCalls` / `Message.toolCallId` fields for replaying tool-calling turns in history.
+-   **`LLMResponse.stopReason`** (`'stop' | 'tool_calls' | 'length' | 'other'`), normalized across providers, so callers can tell why generation ended without parsing content.
+-   **`getDisplayMessages(history)`** helper: filters a tool-aware history down to the user-visible `user`/`assistant` text messages for rendering.
+-   **Test infrastructure**: vitest unit tests for the provider mapping layers (`npm test`).
+
+## [0.3.0] - 2026-06-09
+
+### Added
+
+-   **Multi-modal image input.** `Message` now accepts an optional `images` array (`{ data: base64, mimeType }`). When present, each provider builds a multi-part request combining the text `content` with the image(s): OpenAI / UBC LLM Sandbox use base64 `image_url` data URLs, Anthropic uses base64 `image` content blocks, and Ollama attaches base64 strings via the message `images` field. Works across `sendConversation`, `streamConversation`, and (OpenAI/Anthropic) `sendStructuredConversation`. Messages without `images` are unchanged and fully backwards compatible.
+
 ## [0.2.4] - 2026-05-12
 
 ### Changed

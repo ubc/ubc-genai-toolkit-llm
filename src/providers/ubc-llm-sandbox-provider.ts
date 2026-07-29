@@ -33,43 +33,14 @@ import {
 } from '../types';
 import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
 import type { ZodType } from 'zod';
-
-// Helper function to extract known vs. unknown options for OpenAI-compatible APIs
-function separateOpenAIOptions(options: LLMOptions = {}) {
-	const {
-		model,
-		temperature,
-		maxTokens,
-		systemPrompt,
-		responseFormat,
-		stream,
-		reasoningEffort,
-		structuredOutputName: _structuredOutputName,
-		reasoning_effort: _reasoning_effort,
-		max_completion_tokens: _max_completion_tokens,
-		...rest
-	} = options as LLMOptions & {
-		structuredOutputName?: string;
-		reasoning_effort?: string;
-		max_completion_tokens?: number;
-	};
-
-	const known = {
-		model,
-		temperature,
-		maxTokens,
-		systemPrompt,
-		responseFormat,
-		stream,
-		reasoningEffort,
-		structuredOutputName: _structuredOutputName,
-	};
-
-	return {
-		known,
-		rest,
-	};
-}
+import {
+	separateOpenAIOptions,
+	toOpenAIContent,
+	toOpenAIMessages,
+	toOpenAITools,
+	fromOpenAIToolCalls,
+	mapOpenAIFinishReason,
+} from './openai-compat-mapping';
 
 function openAIReasoningEffort(
 	reasoningEffort: LLMOptions['reasoningEffort']
@@ -220,11 +191,8 @@ export class UbcLlmSandboxProvider implements Provider {
 		this.logger.debug('Sending conversation to UBC LLM Sandbox', { model, messageCount: messages.length, options });
 
 		try {
-			// Convert to OpenAI format
-			const openaiMessages = messages.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-			}));
+			// System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
+			const openaiMessages = toOpenAIMessages(messages);
 
 			// Handle system prompt if not already in messages
 			if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
@@ -243,6 +211,12 @@ export class UbcLlmSandboxProvider implements Provider {
 					options?.responseFormat === 'json'
 						? { type: 'json_object' }
 						: undefined,
+				// Tool calling: translate toolkit definitions into OpenAI function tools.
+				tools:
+					options?.tools && options.tools.length > 0
+						? toOpenAITools(options.tools)
+						: undefined,
+				tool_choice: options?.toolChoice,
 				stream: false,
 				...rest,
 			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
@@ -299,11 +273,8 @@ export class UbcLlmSandboxProvider implements Provider {
 		this.logger.debug('Streaming conversation from UBC LLM Sandbox', { model, messageCount: messages.length, options });
 
 		try {
-			// Convert to OpenAI format
-			const openaiMessages = messages.map((msg) => ({
-				role: msg.role,
-				content: msg.content,
-			}));
+			// System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
+			const openaiMessages = toOpenAIMessages(messages);
 
 			// Handle system prompt if not already in messages
 			if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
@@ -318,35 +289,64 @@ export class UbcLlmSandboxProvider implements Provider {
 				temperature: options?.temperature,
 				max_tokens: options?.maxTokens,
 				...openAIReasoningEffort(options?.reasoningEffort),
+				// Tool calling: translate toolkit definitions into OpenAI function tools.
+				tools:
+					options?.tools && options.tools.length > 0
+						? toOpenAITools(options.tools)
+						: undefined,
+				tool_choice: options?.toolChoice,
 				stream: true,
 				...rest,
 			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
 
 			let fullContent = '';
-			let finalResponse: OpenAI.Chat.Completions.ChatCompletion | null = null;
+			// Tool-call deltas arrive fragmented across chunks, keyed by index;
+			// accumulate here and surface complete calls only on the final response.
+			const toolCallAcc: Array<{ id?: string; name?: string; args: string }> = [];
+			let finishReason: string | null | undefined;
 
 			for await (const chunk of stream) {
-				const content = chunk.choices[0]?.delta?.content || '';
+				const choice = chunk.choices[0];
+				const content = choice?.delta?.content || '';
 				if (content) {
 					fullContent += content;
 					callback(content);
 				}
-				// LiteLLM might not provide usage stats in the stream itself,
-				// but we can capture the final non-delta part if available (might be empty)
-				if (!chunk.choices[0]?.delta) {
-					// Attempt to capture the final response structure if the API provides it
-					// This is speculative as LiteLLM might differ slightly from OpenAI's exact stream termination
+				if (choice?.delta?.tool_calls) {
+					for (const deltaCall of choice.delta.tool_calls) {
+						const i = deltaCall.index;
+						toolCallAcc[i] ??= { args: '' };
+						if (deltaCall.id) toolCallAcc[i].id = deltaCall.id;
+						if (deltaCall.function?.name) {
+							toolCallAcc[i].name = (toolCallAcc[i].name ?? '') + deltaCall.function.name;
+						}
+						if (deltaCall.function?.arguments) {
+							toolCallAcc[i].args += deltaCall.function.arguments;
+						}
+					}
+				}
+				if (choice?.finish_reason) {
+					finishReason = choice.finish_reason;
 				}
 			}
 
-			// Since LiteLLM might not return full usage stats in the stream like OpenAI,
-			// we may need to make a separate non-streaming call or accept partial/missing usage data.
-			// For simplicity now, we return what we have, acknowledging usage might be incomplete.
-			// We use the model name from options/defaults as the stream response might not confirm it.
+			const toolCalls =
+				toolCallAcc.length > 0
+					? fromOpenAIToolCalls({
+						tool_calls: toolCallAcc.map((acc, i) => ({
+							id: acc.id ?? `call_${i}`,
+							type: 'function',
+							function: { name: acc.name ?? '', arguments: acc.args || '{}' },
+						})),
+					})
+					: undefined;
+
 			return {
 				content: fullContent,
+				toolCalls,
+				stopReason: mapOpenAIFinishReason(finishReason),
 				model: model, // Use the requested model name
-				usage: { // Usage data might be missing or incomplete from stream
+				usage: {
 					promptTokens: undefined,
 					completionTokens: undefined,
 					totalTokens: undefined,
@@ -423,8 +423,11 @@ export class UbcLlmSandboxProvider implements Provider {
 	private normalizeResponse(
 		response: OpenAI.Chat.Completions.ChatCompletion
 	): LLMResponse {
+		const choice = response.choices[0];
 		return {
-			content: response.choices[0]?.message?.content || '',
+			content: choice?.message?.content || '',
+			toolCalls: fromOpenAIToolCalls(choice?.message),
+			stopReason: mapOpenAIFinishReason(choice?.finish_reason),
 			model: response.model,
 			usage: {
 				promptTokens: response.usage?.prompt_tokens,
