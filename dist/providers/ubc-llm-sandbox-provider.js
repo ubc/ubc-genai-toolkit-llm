@@ -156,14 +156,22 @@ class UbcLlmSandboxProvider {
                 ...completionFields,
                 model,
                 messages: openaiMessages,
-                response_format: known.responseFormat === 'json'
-                    ? { type: 'json_object' }
-                    : undefined,
+                // Only set response_format when canonical responseFormat was provided so raw
+                // snake_case passthrough (e.g. BiocBot) in `rest` is not overwritten by undefined.
+                ...(known.responseFormat !== undefined
+                    ? {
+                        response_format: known.responseFormat === 'json'
+                            ? { type: 'json_object' }
+                            : undefined,
+                    }
+                    : {}),
                 // Tool calling: translate toolkit definitions into OpenAI function tools.
                 tools: known.tools && known.tools.length > 0
                     ? (0, openai_compat_mapping_1.toOpenAITools)(known.tools)
                     : undefined,
-                tool_choice: known.toolChoice,
+                ...(known.toolChoice !== undefined
+                    ? { tool_choice: known.toolChoice }
+                    : {}),
                 stream: false,
             });
             return this.normalizeResponse(response);
