@@ -35,22 +35,13 @@ import {
 import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
 import {
 	separateOpenAIOptions,
+	buildOpenAICompatCompletionFields,
 	toOpenAIContent,
 	toOpenAIMessages,
 	toOpenAITools,
 	fromOpenAIToolCalls,
 	mapOpenAIFinishReason,
 } from './openai-compat-mapping';
-
-/** Maps toolkit `reasoningEffort` to OpenAI `reasoning_effort` without rewriting the value. */
-function openAIReasoningEffort(
-	reasoningEffort: LLMOptions['reasoningEffort']
-): { reasoning_effort?: string } {
-	if (reasoningEffort === undefined) {
-		return {};
-	}
-	return { reasoning_effort: reasoningEffort };
-}
 
 export class OpenAIProvider implements Provider {
 	private client: OpenAI;
@@ -135,8 +126,6 @@ export class OpenAIProvider implements Provider {
 		options?: LLMOptions
 	): Promise<LLMResponse> {
 		try {
-			const model = options?.model || this.defaultModel;
-
 			// System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
 			const openaiMessages = toOpenAIMessages(messages);
 
@@ -145,30 +134,29 @@ export class OpenAIProvider implements Provider {
 				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
 			}
 
-			// Separate the options into known and unknown options
-			const { rest } = separateOpenAIOptions(options);
+			const { known, rest } = separateOpenAIOptions(options);
+			const model = known.model || this.defaultModel;
+			const completionFields = buildOpenAICompatCompletionFields(model, known);
 
 			// Create a new response from the OpenAI API
 			const response = await this.client.chat.completions.create({
+				...rest,
+				...completionFields,
 				model,
 				messages: openaiMessages,
-				temperature: options?.temperature,
-				max_tokens: options?.maxTokens,
-				...openAIReasoningEffort(options?.reasoningEffort),
 				// OpenAI JSON mode is opt-in via response_format; omit entirely when not requested so the model stays unconstrained.
 				response_format:
-					options?.responseFormat === 'json'
+					known.responseFormat === 'json'
 						? { type: 'json_object' }
 						: undefined,
 				// Tool calling: translate toolkit definitions into OpenAI function tools.
 				tools:
-					options?.tools && options.tools.length > 0
-						? toOpenAITools(options.tools)
+					known.tools && known.tools.length > 0
+						? toOpenAITools(known.tools)
 						: undefined,
-				tool_choice: options?.toolChoice,
+				tool_choice: known.toolChoice,
 				// Explicit false: callers might pass `stream` in `rest`; we need a non-streaming completion for normalizeResponse.
 				stream: false,
-				...rest,
 			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
 
 			return this.normalizeResponse(response);
@@ -204,29 +192,27 @@ export class OpenAIProvider implements Provider {
 		}
 
 		try {
-			const model = options?.model || this.defaultModel;
-
 			const openaiMessages = toOpenAIMessages(messages);
 
 			if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
 				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
 			}
 
-			const { rest } = separateOpenAIOptions(options);
+			const { known, rest } = separateOpenAIOptions(options);
+			const model = known.model || this.defaultModel;
+			const completionFields = buildOpenAICompatCompletionFields(model, known);
 			// SDK uses this label inside the response_format payload; default keeps logs and debugging consistent across callers.
 			const formatName =
-				options?.structuredOutputName ?? 'structured_output';
+				known.structuredOutputName ?? 'structured_output';
 
 			const response = await this.client.beta.chat.completions.parse({
+				...rest,
+				...completionFields,
 				model,
 				messages: openaiMessages,
-				temperature: options?.temperature,
-				max_tokens: options?.maxTokens,
-				...openAIReasoningEffort(options?.reasoningEffort),
 				response_format: zodResponseFormat(schema, formatName),
 				// parse() is non-streaming only; keep false so `...rest` cannot flip this to a stream by accident.
 				stream: false,
-				...rest,
 			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
 
 			const message = response.choices[0]?.message;
@@ -279,30 +265,28 @@ export class OpenAIProvider implements Provider {
 		options?: LLMOptions
 	): Promise<LLMResponse> {
 		try {
-			const model = options?.model || this.defaultModel;
-
 			const openaiMessages = toOpenAIMessages(messages);
 
 			if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
 				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
 			}
 
-			const { rest } = separateOpenAIOptions(options);
+			const { known, rest } = separateOpenAIOptions(options);
+			const model = known.model || this.defaultModel;
+			const completionFields = buildOpenAICompatCompletionFields(model, known);
 
 			const stream = await this.client.chat.completions.create({
+				...rest,
+				...completionFields,
 				model,
 				messages: openaiMessages,
-				temperature: options?.temperature,
-				max_tokens: options?.maxTokens,
-				...openAIReasoningEffort(options?.reasoningEffort),
 				// Tool calling: translate toolkit definitions into OpenAI function tools.
 				tools:
-					options?.tools && options.tools.length > 0
-						? toOpenAITools(options.tools)
+					known.tools && known.tools.length > 0
+						? toOpenAITools(known.tools)
 						: undefined,
-				tool_choice: options?.toolChoice,
+				tool_choice: known.toolChoice,
 				stream: true,
-				...rest,
 			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
 
 			let fullContent = '';
@@ -439,8 +423,11 @@ export class OpenAIProvider implements Provider {
 		};
 	}
 
-	/** Wraps `OpenAI.APIError` in {@link APIError}; everything else becomes a generic message. */
+	/** Preserves toolkit {@link APIError}; wraps `OpenAI.APIError`; everything else becomes a generic message. */
 	private handleError(error: any): Error {
+		if (error instanceof APIError) {
+			return error;
+		}
 		// Preserve status/code/param from the official client for observability; everything else stays a generic toolkit error.
 		if (error instanceof OpenAI.APIError) {
 			return new APIError(error.message, error.status || 500, {

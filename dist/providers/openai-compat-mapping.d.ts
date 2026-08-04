@@ -7,7 +7,9 @@
  * can be unit-tested without mocking an SDK.
  */
 import OpenAI from 'openai';
-import { LLMOptions, Message, StopReason, ToolCall, ToolDefinition } from '../types';
+import { LLMOptions, Message, ReasoningEffort, StopReason, ToolCall, ToolDefinition } from '../types';
+/** Whether a model accepts / requires OpenAI `reasoning_effort`. */
+export type OpenAIReasoningCapability = 'unsupported' | 'optional' | 'required';
 /**
  * Splits {@link LLMOptions} into fields the toolkit sets explicitly on each
  * request vs. passthrough `rest`.
@@ -17,7 +19,8 @@ import { LLMOptions, Message, StopReason, ToolCall, ToolDefinition } from '../ty
  * toolkit-managed keys. `tools`, `toolChoice`, and `reasoningEffort` are
  * toolkit-managed (they are translated, not forwarded raw) so they are
  * stripped here too. Raw snake_case aliases (`reasoning_effort`,
- * `max_completion_tokens`) are also stripped to avoid double-sending.
+ * `max_completion_tokens`, `max_tokens`) are stripped to avoid double-sending,
+ * but their values are retained and normalized into `known` (camelCase wins).
  */
 export declare function separateOpenAIOptions(options?: LLMOptions): {
     known: {
@@ -27,7 +30,7 @@ export declare function separateOpenAIOptions(options?: LLMOptions): {
         systemPrompt: string | undefined;
         responseFormat: "json" | "text" | undefined;
         stream: boolean | undefined;
-        reasoningEffort: import("../types").ReasoningEffort | undefined;
+        reasoningEffort: ReasoningEffort | undefined;
         tools: ToolDefinition[] | undefined;
         toolChoice: "required" | "none" | "auto" | undefined;
         structuredOutputName: string | undefined;
@@ -35,6 +38,35 @@ export declare function separateOpenAIOptions(options?: LLMOptions): {
     rest: {
         [key: string]: any;
     };
+};
+/**
+ * Model-based reasoning support for OpenAI-compatible Chat Completions.
+ * Capability is driven by the model id, not by which provider wrapper is used.
+ *
+ * - unsupported — classic chat models; omit reasoning; error if requested
+ * - optional — gpt-5 / o-series; send `reasoning_effort` only when requested
+ * - required — reserved; no production models seeded yet
+ */
+export declare function getOpenAIReasoningCapability(model: string): OpenAIReasoningCapability;
+export interface OpenAICompatCompletionKnown {
+    maxTokens?: number;
+    reasoningEffort?: ReasoningEffort | string;
+    temperature?: number;
+}
+/**
+ * Builds the token / reasoning / temperature slice for an OpenAI-compatible
+ * chat completion request. Token field name follows model capability
+ * (`max_completion_tokens` vs `max_tokens`). Reasoning is omitted unless the
+ * model supports it and the caller requested an effort.
+ *
+ * @throws {APIError} 400 for unsupported model+effort, invalid effort, or
+ * required capability with no effort supplied.
+ */
+export declare function buildOpenAICompatCompletionFields(model: string, known?: OpenAICompatCompletionKnown): {
+    temperature?: number;
+    max_tokens?: number;
+    max_completion_tokens?: number;
+    reasoning_effort?: string;
 };
 /**
  * Message content for the OpenAI SDK: a plain string, or a multi-part array

@@ -9,6 +9,8 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.separateOpenAIOptions = separateOpenAIOptions;
+exports.getOpenAIReasoningCapability = getOpenAIReasoningCapability;
+exports.buildOpenAICompatCompletionFields = buildOpenAICompatCompletionFields;
 exports.toOpenAIContent = toOpenAIContent;
 exports.toOpenAIMessages = toOpenAIMessages;
 exports.toOpenAITools = toOpenAITools;
@@ -16,6 +18,15 @@ exports.fromOpenAIToolCalls = fromOpenAIToolCalls;
 exports.mapOpenAIFinishReason = mapOpenAIFinishReason;
 const zod_to_json_schema_1 = require("zod-to-json-schema");
 const ubc_genai_toolkit_core_1 = require("ubc-genai-toolkit-core");
+const ALLOWED_REASONING_EFFORTS = new Set([
+    'none',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+]);
 /**
  * Splits {@link LLMOptions} into fields the toolkit sets explicitly on each
  * request vs. passthrough `rest`.
@@ -25,25 +36,85 @@ const ubc_genai_toolkit_core_1 = require("ubc-genai-toolkit-core");
  * toolkit-managed keys. `tools`, `toolChoice`, and `reasoningEffort` are
  * toolkit-managed (they are translated, not forwarded raw) so they are
  * stripped here too. Raw snake_case aliases (`reasoning_effort`,
- * `max_completion_tokens`) are also stripped to avoid double-sending.
+ * `max_completion_tokens`, `max_tokens`) are stripped to avoid double-sending,
+ * but their values are retained and normalized into `known` (camelCase wins).
  */
 function separateOpenAIOptions(options = {}) {
     const { model, temperature, maxTokens, systemPrompt, responseFormat, stream, reasoningEffort, tools, toolChoice, 
     // Rename so it is not forwarded in `rest`; only structured calls need the name.
-    structuredOutputName: _structuredOutputName, reasoning_effort: _reasoning_effort, max_completion_tokens: _max_completion_tokens, ...rest } = options;
+    structuredOutputName: _structuredOutputName, reasoning_effort: reasoningEffortSnake, max_completion_tokens: maxCompletionTokensSnake, max_tokens: maxTokensSnake, ...rest } = options;
     const known = {
         model,
         temperature,
-        maxTokens,
+        maxTokens: maxTokens ?? maxCompletionTokensSnake ?? maxTokensSnake,
         systemPrompt,
         responseFormat,
         stream,
-        reasoningEffort,
+        reasoningEffort: (reasoningEffort ??
+            reasoningEffortSnake),
         tools,
         toolChoice,
         structuredOutputName: _structuredOutputName,
     };
     return { known, rest };
+}
+/**
+ * Model-based reasoning support for OpenAI-compatible Chat Completions.
+ * Capability is driven by the model id, not by which provider wrapper is used.
+ *
+ * - unsupported — classic chat models; omit reasoning; error if requested
+ * - optional — gpt-5 / o-series; send `reasoning_effort` only when requested
+ * - required — reserved; no production models seeded yet
+ */
+function getOpenAIReasoningCapability(model) {
+    const id = model.toLowerCase();
+    if (id.startsWith('gpt-5') ||
+        id.startsWith('o1') ||
+        id.startsWith('o3') ||
+        id.startsWith('o4-mini')) {
+        return 'optional';
+    }
+    return 'unsupported';
+}
+/**
+ * Builds the token / reasoning / temperature slice for an OpenAI-compatible
+ * chat completion request. Token field name follows model capability
+ * (`max_completion_tokens` vs `max_tokens`). Reasoning is omitted unless the
+ * model supports it and the caller requested an effort.
+ *
+ * @throws {APIError} 400 for unsupported model+effort, invalid effort, or
+ * required capability with no effort supplied.
+ */
+function buildOpenAICompatCompletionFields(model, known = {}) {
+    const capability = getOpenAIReasoningCapability(model);
+    const fields = {};
+    if (known.temperature !== undefined) {
+        fields.temperature = known.temperature;
+    }
+    if (known.maxTokens !== undefined) {
+        if (capability === 'optional' || capability === 'required') {
+            fields.max_completion_tokens = known.maxTokens;
+        }
+        else {
+            fields.max_tokens = known.maxTokens;
+        }
+    }
+    const effort = known.reasoningEffort;
+    if (capability === 'required' && effort === undefined) {
+        throw new ubc_genai_toolkit_core_1.APIError(`Model '${model}' requires reasoningEffort (or reasoning_effort); none was provided.`, 400, { model, capability });
+    }
+    if (effort !== undefined) {
+        if (capability === 'unsupported') {
+            throw new ubc_genai_toolkit_core_1.APIError(`Model '${model}' does not support reasoningEffort; omit it or choose a reasoning-capable model.`, 400, { model, reasoningEffort: effort });
+        }
+        if (!ALLOWED_REASONING_EFFORTS.has(effort)) {
+            throw new ubc_genai_toolkit_core_1.APIError(`Unsupported reasoningEffort '${effort}' for model '${model}'. Allowed: ${[
+                ...ALLOWED_REASONING_EFFORTS,
+            ].join(', ')}.`, 400, { model, reasoningEffort: effort });
+        }
+        fields.reasoning_effort = effort;
+    }
+    return fields;
 }
 /**
  * Message content for the OpenAI SDK: a plain string, or a multi-part array

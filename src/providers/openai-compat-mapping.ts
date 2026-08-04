@@ -13,10 +13,24 @@ import { APIError } from 'ubc-genai-toolkit-core';
 import {
 	LLMOptions,
 	Message,
+	ReasoningEffort,
 	StopReason,
 	ToolCall,
 	ToolDefinition,
 } from '../types';
+
+/** Whether a model accepts / requires OpenAI `reasoning_effort`. */
+export type OpenAIReasoningCapability = 'unsupported' | 'optional' | 'required';
+
+const ALLOWED_REASONING_EFFORTS: ReadonlySet<string> = new Set<ReasoningEffort>([
+	'none',
+	'minimal',
+	'low',
+	'medium',
+	'high',
+	'xhigh',
+	'max',
+]);
 
 /**
  * Splits {@link LLMOptions} into fields the toolkit sets explicitly on each
@@ -27,7 +41,8 @@ import {
  * toolkit-managed keys. `tools`, `toolChoice`, and `reasoningEffort` are
  * toolkit-managed (they are translated, not forwarded raw) so they are
  * stripped here too. Raw snake_case aliases (`reasoning_effort`,
- * `max_completion_tokens`) are also stripped to avoid double-sending.
+ * `max_completion_tokens`, `max_tokens`) are stripped to avoid double-sending,
+ * but their values are retained and normalized into `known` (camelCase wins).
  */
 export function separateOpenAIOptions(options: LLMOptions = {}) {
 	const {
@@ -42,29 +57,132 @@ export function separateOpenAIOptions(options: LLMOptions = {}) {
 		toolChoice,
 		// Rename so it is not forwarded in `rest`; only structured calls need the name.
 		structuredOutputName: _structuredOutputName,
-		reasoning_effort: _reasoning_effort,
-		max_completion_tokens: _max_completion_tokens,
+		reasoning_effort: reasoningEffortSnake,
+		max_completion_tokens: maxCompletionTokensSnake,
+		max_tokens: maxTokensSnake,
 		...rest
 	} = options as LLMOptions & {
 		structuredOutputName?: string;
-		reasoning_effort?: string;
+		reasoning_effort?: ReasoningEffort | string;
 		max_completion_tokens?: number;
+		max_tokens?: number;
 	};
 
 	const known = {
 		model,
 		temperature,
-		maxTokens,
+		maxTokens: maxTokens ?? maxCompletionTokensSnake ?? maxTokensSnake,
 		systemPrompt,
 		responseFormat,
 		stream,
-		reasoningEffort,
+		reasoningEffort: (reasoningEffort ??
+			reasoningEffortSnake) as ReasoningEffort | undefined,
 		tools,
 		toolChoice,
 		structuredOutputName: _structuredOutputName,
 	};
 
 	return { known, rest };
+}
+
+/**
+ * Model-based reasoning support for OpenAI-compatible Chat Completions.
+ * Capability is driven by the model id, not by which provider wrapper is used.
+ *
+ * - unsupported — classic chat models; omit reasoning; error if requested
+ * - optional — gpt-5 / o-series; send `reasoning_effort` only when requested
+ * - required — reserved; no production models seeded yet
+ */
+export function getOpenAIReasoningCapability(
+	model: string
+): OpenAIReasoningCapability {
+	const id = model.toLowerCase();
+	if (
+		id.startsWith('gpt-5') ||
+		id.startsWith('o1') ||
+		id.startsWith('o3') ||
+		id.startsWith('o4-mini')
+	) {
+		return 'optional';
+	}
+	return 'unsupported';
+}
+
+export interface OpenAICompatCompletionKnown {
+	maxTokens?: number;
+	reasoningEffort?: ReasoningEffort | string;
+	temperature?: number;
+}
+
+/**
+ * Builds the token / reasoning / temperature slice for an OpenAI-compatible
+ * chat completion request. Token field name follows model capability
+ * (`max_completion_tokens` vs `max_tokens`). Reasoning is omitted unless the
+ * model supports it and the caller requested an effort.
+ *
+ * @throws {APIError} 400 for unsupported model+effort, invalid effort, or
+ * required capability with no effort supplied.
+ */
+export function buildOpenAICompatCompletionFields(
+	model: string,
+	known: OpenAICompatCompletionKnown = {}
+): {
+	temperature?: number;
+	max_tokens?: number;
+	max_completion_tokens?: number;
+	reasoning_effort?: string;
+} {
+	const capability = getOpenAIReasoningCapability(model);
+	const fields: {
+		temperature?: number;
+		max_tokens?: number;
+		max_completion_tokens?: number;
+		reasoning_effort?: string;
+	} = {};
+
+	if (known.temperature !== undefined) {
+		fields.temperature = known.temperature;
+	}
+
+	if (known.maxTokens !== undefined) {
+		if (capability === 'optional' || capability === 'required') {
+			fields.max_completion_tokens = known.maxTokens;
+		} else {
+			fields.max_tokens = known.maxTokens;
+		}
+	}
+
+	const effort = known.reasoningEffort;
+
+	if (capability === 'required' && effort === undefined) {
+		throw new APIError(
+			`Model '${model}' requires reasoningEffort (or reasoning_effort); none was provided.`,
+			400,
+			{ model, capability }
+		);
+	}
+
+	if (effort !== undefined) {
+		if (capability === 'unsupported') {
+			throw new APIError(
+				`Model '${model}' does not support reasoningEffort; omit it or choose a reasoning-capable model.`,
+				400,
+				{ model, reasoningEffort: effort }
+			);
+		}
+		if (!ALLOWED_REASONING_EFFORTS.has(effort)) {
+			throw new APIError(
+				`Unsupported reasoningEffort '${effort}' for model '${model}'. Allowed: ${[
+					...ALLOWED_REASONING_EFFORTS,
+				].join(', ')}.`,
+				400,
+				{ model, reasoningEffort: effort }
+			);
+		}
+		fields.reasoning_effort = effort;
+	}
+
+	return fields;
 }
 
 /**

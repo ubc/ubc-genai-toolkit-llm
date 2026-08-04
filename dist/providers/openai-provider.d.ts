@@ -95,7 +95,7 @@ export declare class OpenAIProvider implements Provider {
     private normalizeResponse;
     /** Maps OpenAI embeddings response to {@link EmbeddingResponse}. */
     private normalizeEmbeddingResponse;
-    /** Wraps `OpenAI.APIError` in {@link APIError}; everything else becomes a generic message. */
+    /** Preserves toolkit {@link APIError}; wraps `OpenAI.APIError`; everything else becomes a generic message. */
     private handleError;
 }
 //# sourceMappingURL=openai-provider.d.ts.map

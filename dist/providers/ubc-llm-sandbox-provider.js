@@ -29,12 +29,6 @@ exports.UbcLlmSandboxProvider = void 0;
 const openai_1 = __importDefault(require("openai"));
 const ubc_genai_toolkit_core_1 = require("ubc-genai-toolkit-core");
 const openai_compat_mapping_1 = require("./openai-compat-mapping");
-function openAIReasoningEffort(reasoningEffort) {
-    if (reasoningEffort === undefined) {
-        return {};
-    }
-    return { reasoning_effort: reasoningEffort };
-}
 /**
  * Provides access to Large Language Models (LLMs) via the UBC LLM Sandbox service.
  *
@@ -146,8 +140,6 @@ class UbcLlmSandboxProvider {
      * @throws {APIError} If the underlying API call fails.
      */
     async sendConversation(messages, options) {
-        const model = options?.model || this.defaultModel;
-        this.logger.debug('Sending conversation to UBC LLM Sandbox', { model, messageCount: messages.length, options });
         try {
             // System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
             const openaiMessages = (0, openai_compat_mapping_1.toOpenAIMessages)(messages);
@@ -155,23 +147,24 @@ class UbcLlmSandboxProvider {
             if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
                 openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
             }
-            const { rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const { known, rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const model = known.model || this.defaultModel;
+            const completionFields = (0, openai_compat_mapping_1.buildOpenAICompatCompletionFields)(model, known);
+            this.logger.debug('Sending conversation to UBC LLM Sandbox', { model, messageCount: messages.length, options });
             const response = await this.client.chat.completions.create({
+                ...rest,
+                ...completionFields,
                 model,
                 messages: openaiMessages,
-                temperature: options?.temperature,
-                max_tokens: options?.maxTokens,
-                ...openAIReasoningEffort(options?.reasoningEffort),
-                response_format: options?.responseFormat === 'json'
+                response_format: known.responseFormat === 'json'
                     ? { type: 'json_object' }
                     : undefined,
                 // Tool calling: translate toolkit definitions into OpenAI function tools.
-                tools: options?.tools && options.tools.length > 0
-                    ? (0, openai_compat_mapping_1.toOpenAITools)(options.tools)
+                tools: known.tools && known.tools.length > 0
+                    ? (0, openai_compat_mapping_1.toOpenAITools)(known.tools)
                     : undefined,
-                tool_choice: options?.toolChoice,
+                tool_choice: known.toolChoice,
                 stream: false,
-                ...rest,
             });
             return this.normalizeResponse(response);
         }
@@ -208,8 +201,6 @@ class UbcLlmSandboxProvider {
      * @throws {APIError} If the underlying API call fails or an error occurs during streaming.
      */
     async streamConversation(messages, callback, options) {
-        const model = options?.model || this.defaultModel;
-        this.logger.debug('Streaming conversation from UBC LLM Sandbox', { model, messageCount: messages.length, options });
         try {
             // System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
             const openaiMessages = (0, openai_compat_mapping_1.toOpenAIMessages)(messages);
@@ -217,20 +208,21 @@ class UbcLlmSandboxProvider {
             if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
                 openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
             }
-            const { rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const { known, rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const model = known.model || this.defaultModel;
+            const completionFields = (0, openai_compat_mapping_1.buildOpenAICompatCompletionFields)(model, known);
+            this.logger.debug('Streaming conversation from UBC LLM Sandbox', { model, messageCount: messages.length, options });
             const stream = await this.client.chat.completions.create({
+                ...rest,
+                ...completionFields,
                 model,
                 messages: openaiMessages,
-                temperature: options?.temperature,
-                max_tokens: options?.maxTokens,
-                ...openAIReasoningEffort(options?.reasoningEffort),
                 // Tool calling: translate toolkit definitions into OpenAI function tools.
-                tools: options?.tools && options.tools.length > 0
-                    ? (0, openai_compat_mapping_1.toOpenAITools)(options.tools)
+                tools: known.tools && known.tools.length > 0
+                    ? (0, openai_compat_mapping_1.toOpenAITools)(known.tools)
                     : undefined,
-                tool_choice: options?.toolChoice,
+                tool_choice: known.toolChoice,
                 stream: true,
-                ...rest,
             });
             let fullContent = '';
             // Tool-call deltas arrive fragmented across chunks, keyed by index;
@@ -400,6 +392,9 @@ class UbcLlmSandboxProvider {
      * @private
      */
     handleError(error) {
+        if (error instanceof ubc_genai_toolkit_core_1.APIError) {
+            return error;
+        }
         if (error instanceof openai_1.default.APIError) {
             // Use a generic message but include specifics in details
             return new ubc_genai_toolkit_core_1.APIError(`UBC LLM Sandbox API Error: ${error.message}`, error.status || 500, {
