@@ -35,6 +35,7 @@ import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
 import type { ZodType } from 'zod';
 import {
 	separateOpenAIOptions,
+	buildOpenAICompatCompletionFields,
 	toOpenAIContent,
 	toOpenAIMessages,
 	toOpenAITools,
@@ -178,9 +179,6 @@ export class UbcLlmSandboxProvider implements Provider {
 		messages: Message[],
 		options?: LLMOptions
 	): Promise<LLMResponse> {
-		const model = options?.model || this.defaultModel;
-		this.logger.debug('Sending conversation to UBC LLM Sandbox', { model, messageCount: messages.length, options });
-
 		try {
 			// System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
 			const openaiMessages = toOpenAIMessages(messages);
@@ -190,26 +188,36 @@ export class UbcLlmSandboxProvider implements Provider {
 				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
 			}
 
-			const { rest } = separateOpenAIOptions(options);
+			const { known, rest } = separateOpenAIOptions(options);
+			const model = known.model || this.defaultModel;
+			const completionFields = buildOpenAICompatCompletionFields(model, known);
+			this.logger.debug('Sending conversation to UBC LLM Sandbox', { model, messageCount: messages.length, options });
 
 			const response = await this.client.chat.completions.create({
+				...rest,
+				...completionFields,
 				model,
 				messages: openaiMessages,
-				temperature: options?.temperature,
-				max_tokens: options?.maxTokens,
-				response_format:
-					options?.responseFormat === 'json'
-						? { type: 'json_object' }
-						: undefined,
+				// Only set response_format when canonical responseFormat was provided so raw
+				// snake_case passthrough (e.g. BiocBot) in `rest` is not overwritten by undefined.
+				...(known.responseFormat !== undefined
+					? {
+							response_format:
+								known.responseFormat === 'json'
+									? { type: 'json_object' }
+									: undefined,
+						}
+					: {}),
 				// Tool calling: translate toolkit definitions into OpenAI function tools.
 				tools:
-					options?.tools && options.tools.length > 0
-						? toOpenAITools(options.tools)
+					known.tools && known.tools.length > 0
+						? toOpenAITools(known.tools)
 						: undefined,
-				tool_choice: options?.toolChoice,
+				...(known.toolChoice !== undefined
+					? { tool_choice: known.toolChoice }
+					: {}),
 				stream: false,
-				...rest,
-			});
+			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
 
 			return this.normalizeResponse(response);
 		} catch (error) {
@@ -259,9 +267,6 @@ export class UbcLlmSandboxProvider implements Provider {
 		callback: (chunk: string) => void,
 		options?: LLMOptions
 	): Promise<LLMResponse> {
-		const model = options?.model || this.defaultModel;
-		this.logger.debug('Streaming conversation from UBC LLM Sandbox', { model, messageCount: messages.length, options });
-
 		try {
 			// System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
 			const openaiMessages = toOpenAIMessages(messages);
@@ -271,22 +276,24 @@ export class UbcLlmSandboxProvider implements Provider {
 				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
 			}
 
-			const { rest } = separateOpenAIOptions(options);
+			const { known, rest } = separateOpenAIOptions(options);
+			const model = known.model || this.defaultModel;
+			const completionFields = buildOpenAICompatCompletionFields(model, known);
+			this.logger.debug('Streaming conversation from UBC LLM Sandbox', { model, messageCount: messages.length, options });
 
 			const stream = await this.client.chat.completions.create({
+				...rest,
+				...completionFields,
 				model,
 				messages: openaiMessages,
-				temperature: options?.temperature,
-				max_tokens: options?.maxTokens,
 				// Tool calling: translate toolkit definitions into OpenAI function tools.
 				tools:
-					options?.tools && options.tools.length > 0
-						? toOpenAITools(options.tools)
+					known.tools && known.tools.length > 0
+						? toOpenAITools(known.tools)
 						: undefined,
-				tool_choice: options?.toolChoice,
+				tool_choice: known.toolChoice,
 				stream: true,
-				...rest,
-			});
+			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
 
 			let fullContent = '';
 			// Tool-call deltas arrive fragmented across chunks, keyed by index;
@@ -472,6 +479,9 @@ export class UbcLlmSandboxProvider implements Provider {
 	 * @private
 	 */
 	private handleError(error: any): Error {
+		if (error instanceof APIError) {
+			return error;
+		}
 		if (error instanceof OpenAI.APIError) {
 			// Use a generic message but include specifics in details
 			return new APIError(`UBC LLM Sandbox API Error: ${error.message}`, error.status || 500, {

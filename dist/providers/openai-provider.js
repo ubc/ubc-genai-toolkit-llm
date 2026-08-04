@@ -87,33 +87,39 @@ class OpenAIProvider {
      */
     async sendConversation(messages, options) {
         try {
-            const model = options?.model || this.defaultModel;
             // System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
             const openaiMessages = (0, openai_compat_mapping_1.toOpenAIMessages)(messages);
             // Avoid duplicating system: if the transcript already has system, trust it; else prepend options.systemPrompt once.
             if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
                 openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
             }
-            // Separate the options into known and unknown options
-            const { rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const { known, rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const model = known.model || this.defaultModel;
+            const completionFields = (0, openai_compat_mapping_1.buildOpenAICompatCompletionFields)(model, known);
             // Create a new response from the OpenAI API
             const response = await this.client.chat.completions.create({
+                ...rest,
+                ...completionFields,
                 model,
                 messages: openaiMessages,
-                temperature: options?.temperature,
-                max_tokens: options?.maxTokens,
-                // OpenAI JSON mode is opt-in via response_format; omit entirely when not requested so the model stays unconstrained.
-                response_format: options?.responseFormat === 'json'
-                    ? { type: 'json_object' }
-                    : undefined,
+                // Only set response_format when canonical responseFormat was provided so raw
+                // snake_case passthrough (e.g. BiocBot) in `rest` is not overwritten by undefined.
+                ...(known.responseFormat !== undefined
+                    ? {
+                        response_format: known.responseFormat === 'json'
+                            ? { type: 'json_object' }
+                            : undefined,
+                    }
+                    : {}),
                 // Tool calling: translate toolkit definitions into OpenAI function tools.
-                tools: options?.tools && options.tools.length > 0
-                    ? (0, openai_compat_mapping_1.toOpenAITools)(options.tools)
+                tools: known.tools && known.tools.length > 0
+                    ? (0, openai_compat_mapping_1.toOpenAITools)(known.tools)
                     : undefined,
-                tool_choice: options?.toolChoice,
+                ...(known.toolChoice !== undefined
+                    ? { tool_choice: known.toolChoice }
+                    : {}),
                 // Explicit false: callers might pass `stream` in `rest`; we need a non-streaming completion for normalizeResponse.
                 stream: false,
-                ...rest,
             });
             return this.normalizeResponse(response);
         }
@@ -139,23 +145,23 @@ class OpenAIProvider {
             throw new ubc_genai_toolkit_core_1.APIError('Tool calling is not supported with structured output; use sendConversation for the tool loop.', 400, { provider: 'openai' });
         }
         try {
-            const model = options?.model || this.defaultModel;
             const openaiMessages = (0, openai_compat_mapping_1.toOpenAIMessages)(messages);
             if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
                 openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
             }
-            const { rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const { known, rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const model = known.model || this.defaultModel;
+            const completionFields = (0, openai_compat_mapping_1.buildOpenAICompatCompletionFields)(model, known);
             // SDK uses this label inside the response_format payload; default keeps logs and debugging consistent across callers.
-            const formatName = options?.structuredOutputName ?? 'structured_output';
+            const formatName = known.structuredOutputName ?? 'structured_output';
             const response = await this.client.beta.chat.completions.parse({
+                ...rest,
+                ...completionFields,
                 model,
                 messages: openaiMessages,
-                temperature: options?.temperature,
-                max_tokens: options?.maxTokens,
                 response_format: (0, zod_1.zodResponseFormat)(schema, formatName),
                 // parse() is non-streaming only; keep false so `...rest` cannot flip this to a stream by accident.
                 stream: false,
-                ...rest,
             });
             const message = response.choices[0]?.message;
             const refusal = message?.refusal;
@@ -192,24 +198,24 @@ class OpenAIProvider {
      */
     async streamConversation(messages, callback, options) {
         try {
-            const model = options?.model || this.defaultModel;
             const openaiMessages = (0, openai_compat_mapping_1.toOpenAIMessages)(messages);
             if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
                 openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
             }
-            const { rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const { known, rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
+            const model = known.model || this.defaultModel;
+            const completionFields = (0, openai_compat_mapping_1.buildOpenAICompatCompletionFields)(model, known);
             const stream = await this.client.chat.completions.create({
+                ...rest,
+                ...completionFields,
                 model,
                 messages: openaiMessages,
-                temperature: options?.temperature,
-                max_tokens: options?.maxTokens,
                 // Tool calling: translate toolkit definitions into OpenAI function tools.
-                tools: options?.tools && options.tools.length > 0
-                    ? (0, openai_compat_mapping_1.toOpenAITools)(options.tools)
+                tools: known.tools && known.tools.length > 0
+                    ? (0, openai_compat_mapping_1.toOpenAITools)(known.tools)
                     : undefined,
-                tool_choice: options?.toolChoice,
+                tool_choice: known.toolChoice,
                 stream: true,
-                ...rest,
             });
             let fullContent = '';
             // Tool-call deltas arrive fragmented across chunks, keyed by index;
@@ -330,8 +336,11 @@ class OpenAIProvider {
             },
         };
     }
-    /** Wraps `OpenAI.APIError` in {@link APIError}; everything else becomes a generic message. */
+    /** Preserves toolkit {@link APIError}; wraps `OpenAI.APIError`; everything else becomes a generic message. */
     handleError(error) {
+        if (error instanceof ubc_genai_toolkit_core_1.APIError) {
+            return error;
+        }
         // Preserve status/code/param from the official client for observability; everything else stays a generic toolkit error.
         if (error instanceof openai_1.default.APIError) {
             return new ubc_genai_toolkit_core_1.APIError(error.message, error.status || 500, {

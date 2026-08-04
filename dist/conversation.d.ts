@@ -36,7 +36,7 @@ export declare class ConversationImpl implements Conversation {
     /**
      * Sends the entire conversation history to the LLM for a response.
      * The LLM's response is then added to the history as an 'assistant' message.
-     * @param {LLMOptions} [options] - Optional parameters to customize the LLM request (e.g., temperature, max tokens).
+     * @param {LLMOptions} [options] - Optional parameters to customize the LLM request (e.g., temperature, reasoningEffort, max tokens).
      * @returns {Promise<LLMResponse>} A promise that resolves with the LLM's response, including content and potentially other metadata.
      */
     send(options?: LLMOptions): Promise<LLMResponse>;
@@ -45,10 +45,15 @@ export declare class ConversationImpl implements Conversation {
      * Chunks of the response are passed to the provided callback function as they arrive.
      * The complete response is added to the history as an 'assistant' message once the stream finishes.
      * @param {(chunk: string) => void} callback - A function to be called with each chunk of the streamed response.
-     * @param {LLMOptions} [options] - Optional parameters to customize the LLM request.
+     * @param {LLMOptions} [options] - Optional parameters to customize the LLM request (e.g., temperature, reasoningEffort).
      * @returns {Promise<LLMResponse>} A promise that resolves with the final LLM response object (containing the full content) once the stream is complete.
      */
     stream(callback: (chunk: string) => void, options?: LLMOptions): Promise<LLMResponse>;
+    /**
+     * Sends the conversation for a Zod-validated structured reply.
+     * @param schema - Zod schema the model output must match.
+     * @param options - Optional parameters (e.g., temperature, reasoningEffort, maxTokens).
+     */
     sendStructured<T>(schema: ZodType<T>, options?: StructuredOutputOptions): Promise<LLMStructuredResponse<T>>;
 }
 //# sourceMappingURL=conversation.d.ts.map

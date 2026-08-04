@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import {
 	separateOpenAIOptions,
+	getOpenAIReasoningCapability,
+	buildOpenAICompatCompletionFields,
 	toOpenAIMessages,
 	toOpenAITools,
 	fromOpenAIToolCalls,
@@ -10,10 +12,11 @@ import {
 import type { Message } from '../src/types';
 
 describe('separateOpenAIOptions', () => {
-	it('strips toolkit-managed fields (including tools/toolChoice) out of rest', () => {
+	it('strips toolkit-managed fields (including tools/toolChoice/reasoningEffort) out of rest', () => {
 		const { rest } = separateOpenAIOptions({
 			model: 'gpt-4o',
 			temperature: 0.5,
+			reasoningEffort: 'low',
 			tools: [
 				{ name: 't', description: 'd', parameters: z.object({}) },
 			],
@@ -21,6 +24,104 @@ describe('separateOpenAIOptions', () => {
 			custom_param: 42,
 		});
 		expect(rest).toEqual({ custom_param: 42 });
+	});
+
+	it('strips raw aliases from rest but retains normalized values in known', () => {
+		const { known, rest } = separateOpenAIOptions({
+			model: 'gpt-5-mini',
+			reasoning_effort: 'low',
+			max_completion_tokens: 1024,
+			custom_param: 1,
+		} as any);
+		expect(rest).toEqual({ custom_param: 1 });
+		expect(known.reasoningEffort).toBe('low');
+		expect(known.maxTokens).toBe(1024);
+	});
+
+	it('prefers camelCase when both aliases are supplied', () => {
+		const { known, rest } = separateOpenAIOptions({
+			reasoningEffort: 'high',
+			reasoning_effort: 'low',
+			maxTokens: 500,
+			max_completion_tokens: 2000,
+			max_tokens: 100,
+			passthrough: true,
+		} as any);
+		expect(known.reasoningEffort).toBe('high');
+		expect(known.maxTokens).toBe(500);
+		expect(rest).toEqual({ passthrough: true });
+	});
+
+	it('strips max_tokens from rest and folds it into known.maxTokens', () => {
+		const { known, rest } = separateOpenAIOptions({
+			max_tokens: 777,
+			other: 1,
+		} as any);
+		expect(known.maxTokens).toBe(777);
+		expect(rest).toEqual({ other: 1 });
+	});
+});
+
+describe('getOpenAIReasoningCapability', () => {
+	it('marks classic chat models as unsupported', () => {
+		expect(getOpenAIReasoningCapability('gpt-4.1-mini')).toBe('unsupported');
+		expect(getOpenAIReasoningCapability('gpt-4o')).toBe('unsupported');
+	});
+
+	it('marks gpt-5 and o-series as optional', () => {
+		expect(getOpenAIReasoningCapability('gpt-5-nano')).toBe('optional');
+		expect(getOpenAIReasoningCapability('gpt-5-mini')).toBe('optional');
+		expect(getOpenAIReasoningCapability('o1-mini')).toBe('optional');
+		expect(getOpenAIReasoningCapability('o3')).toBe('optional');
+		expect(getOpenAIReasoningCapability('o4-mini')).toBe('optional');
+	});
+});
+
+describe('buildOpenAICompatCompletionFields', () => {
+	it('maps maxTokens to max_tokens for older models and omits reasoning', () => {
+		const fields = buildOpenAICompatCompletionFields('gpt-4.1-mini', {
+			maxTokens: 1000,
+			temperature: 0.2,
+		});
+		expect(fields).toEqual({
+			temperature: 0.2,
+			max_tokens: 1000,
+		});
+	});
+
+	it('maps maxTokens to max_completion_tokens for GPT-5 and sends reasoning when requested', () => {
+		const fields = buildOpenAICompatCompletionFields('gpt-5-nano', {
+			maxTokens: 2000,
+			reasoningEffort: 'low',
+		});
+		expect(fields).toEqual({
+			max_completion_tokens: 2000,
+			reasoning_effort: 'low',
+		});
+	});
+
+	it('omits reasoning_effort for optional models when not requested', () => {
+		const fields = buildOpenAICompatCompletionFields('gpt-5-mini', {
+			maxTokens: 100,
+		});
+		expect(fields.reasoning_effort).toBeUndefined();
+		expect(fields.max_completion_tokens).toBe(100);
+	});
+
+	it('throws APIError when reasoning is requested on an unsupported model', () => {
+		expect(() =>
+			buildOpenAICompatCompletionFields('gpt-4.1-mini', {
+				reasoningEffort: 'low',
+			})
+		).toThrowError(/does not support reasoningEffort/);
+	});
+
+	it('throws APIError for an invalid effort value on a reasoning model', () => {
+		expect(() =>
+			buildOpenAICompatCompletionFields('gpt-5-nano', {
+				reasoningEffort: 'super-high' as any,
+			})
+		).toThrowError(/Unsupported reasoningEffort/);
 	});
 });
 

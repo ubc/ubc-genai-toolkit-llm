@@ -26,6 +26,7 @@ import {
 	LLMResponse,
 	LLMStructuredResponse,
 	Message,
+	ReasoningEffort,
 	StructuredOutputOptions,
 	EmbeddingOptions,
 	EmbeddingResponse,
@@ -54,6 +55,7 @@ function separateOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		reasoningEffort,
 		// Not an Ollama generate field; strip so it cannot be forwarded inside `rest`.
 		// Toolkit-managed: tools are translated natively; Ollama has no toolChoice
 		// equivalent. Both are stripped so they never reach `rest`/`finalOptions`.
@@ -71,6 +73,7 @@ function separateOptions(options: LLMOptions = {}) {
 		systemPrompt,
 		responseFormat,
 		stream,
+		reasoningEffort,
 		tools,
 		toolChoice,
 		structuredOutputName: _structuredOutputName,
@@ -86,6 +89,19 @@ function separateOptions(options: LLMOptions = {}) {
 		ollamaSpecific,
 		rest,
 	};
+}
+
+/** Maps toolkit `reasoningEffort` to Ollama top-level `think` (`false` or level string). */
+function ollamaThinkFromEffort(
+	reasoningEffort?: ReasoningEffort
+): boolean | string | undefined {
+	if (reasoningEffort === undefined) {
+		return undefined;
+	}
+	if (reasoningEffort === 'none') {
+		return false;
+	}
+	return reasoningEffort;
 }
 
 export class OllamaProvider implements Provider {
@@ -184,6 +200,7 @@ export class OllamaProvider implements Provider {
 
 			// Separate known, Ollama-specific, and passthrough options
 			const { ollamaSpecific, rest } = separateOptions(options);
+			const think = ollamaThinkFromEffort(options?.reasoningEffort);
 
 			// Merge Ollama-specific options with the rest of the passthrough options
 			const finalOptions = { ...rest, ...ollamaSpecific };
@@ -206,6 +223,7 @@ export class OllamaProvider implements Provider {
 				model: model,
 				messages: ollamaMessages,
 				stream: false,
+				...(think !== undefined ? { think: think as boolean | 'low' | 'medium' | 'high' } : {}),
 				// `format: 'json'` is Ollama's loose JSON mode; structured chat uses a JSON Schema object instead (see sendStructuredConversation).
 				format: options?.responseFormat === 'json' ? 'json' : undefined,
 				tools:
@@ -261,6 +279,7 @@ export class OllamaProvider implements Provider {
 
 			// Separate known, Ollama-specific, and passthrough options
 			const { ollamaSpecific, rest } = separateOptions(options);
+			const think = ollamaThinkFromEffort(options?.reasoningEffort);
 			// Merge Ollama-specific options with the rest of the passthrough options
 			const finalOptions = { ...rest, ...ollamaSpecific };
 
@@ -281,6 +300,7 @@ export class OllamaProvider implements Provider {
 				model,
 				messages: ollamaMessages,
 				stream: false,
+				...(think !== undefined ? { think: think as boolean | 'low' | 'medium' | 'high' } : {}),
 				format: jsonSchema,
 				options: finalOptions,
 			});
@@ -353,6 +373,7 @@ export class OllamaProvider implements Provider {
 		}));
 
 		const { ollamaSpecific, rest } = separateOptions(options);
+		const think = ollamaThinkFromEffort(options?.reasoningEffort);
 		const finalOptions = { ...rest, ...ollamaSpecific };
 
 		if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
@@ -379,6 +400,7 @@ export class OllamaProvider implements Provider {
 				model: model,
 				messages: ollamaMessages,
 				stream: true,
+				...(think !== undefined ? { think: think as boolean | 'low' | 'medium' | 'high' } : {}),
 				// Same as non-stream: JSON mode is separate from JSON Schema structured output.
 				format: options?.responseFormat === 'json' ? 'json' : undefined,
 				tools:

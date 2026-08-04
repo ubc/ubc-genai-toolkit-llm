@@ -113,4 +113,49 @@ describe('AnthropicProvider tool calling', () => {
 			)
 		).rejects.toThrowError(/structured/i);
 	});
+
+	it('maps reasoningEffort and keeps tools without leaking toolkit keys into rest', async () => {
+		createMock.mockResolvedValue({
+			id: 'msg_2',
+			model: 'claude-x',
+			stop_reason: 'end_turn',
+			stop_sequence: null,
+			content: [{ type: 'text', text: 'ok' }],
+			usage: { input_tokens: 1, output_tokens: 1 },
+		});
+
+		const provider = new AnthropicProvider('key', 'claude-x', new NoopLogger());
+		await provider.sendConversation(
+			[{ role: 'user', content: 'Explain quicksort.' }],
+			{ tools: [calculator], reasoningEffort: 'low' }
+		);
+
+		const params = createMock.mock.calls[0][0];
+		expect(params.thinking).toEqual({ type: 'adaptive' });
+		expect(params.output_config).toEqual({ effort: 'low' });
+		expect(params.tools[0].name).toBe('calculator');
+		expect(params.reasoningEffort).toBeUndefined();
+		expect(params.toolChoice).toBeUndefined();
+	});
+
+	it('maps reasoningEffort none to thinking disabled', async () => {
+		createMock.mockResolvedValue({
+			id: 'msg_3',
+			model: 'claude-x',
+			stop_reason: 'end_turn',
+			stop_sequence: null,
+			content: [{ type: 'text', text: 'ok' }],
+			usage: { input_tokens: 1, output_tokens: 1 },
+		});
+
+		const provider = new AnthropicProvider('key', 'claude-x', new NoopLogger());
+		await provider.sendConversation(
+			[{ role: 'user', content: 'hi' }],
+			{ reasoningEffort: 'none' }
+		);
+
+		const params = createMock.mock.calls[0][0];
+		expect(params.thinking).toEqual({ type: 'disabled' });
+		expect(params.output_config).toBeUndefined();
+	});
 });

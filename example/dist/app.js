@@ -138,10 +138,15 @@ class ConversationApp {
      */
     buildStreamOptions() {
         // Default options for the LLM.
-        const opts = { temperature: 0.5 };
+        const opts = {};
+        // OpenAI gpt-5-mini: uncomment to control reasoning depth (temperature is omitted automatically).
+        if (this.llm.getProviderName() === 'openai') {
+            opts.reasoningEffort = 'medium';
+        }
         // If the provider is Ollama, set the context window to 32768 tokens.
-        if (this.llm.getProviderName() === 'ollama') {
+        else if (this.llm.getProviderName() === 'ollama') {
             opts.num_ctx = 32768;
+            opts.temperature = 0.5;
         }
         return opts;
     }

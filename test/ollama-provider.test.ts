@@ -94,6 +94,54 @@ describe('OllamaProvider tool calling', () => {
 		expect(response.stopReason).toBe('tool_calls');
 	});
 
+	it('maps reasoningEffort and keeps tools without leaking toolkit keys into rest', async () => {
+		chatMock.mockResolvedValue({
+			model: 'llama3.1',
+			done: true,
+			done_reason: 'stop',
+			message: { role: 'assistant', content: 'ok' },
+		});
+
+		const provider = new OllamaProvider(
+			'http://127.0.0.1:11434',
+			'llama3.1',
+			new NoopLogger()
+		);
+		await provider.sendConversation(
+			[{ role: 'user', content: 'Explain quicksort.' }],
+			{ tools: [calculator], reasoningEffort: 'low' }
+		);
+
+		const params = chatMock.mock.calls[0][0];
+		expect(params.think).toBe('low');
+		expect(params.tools[0].function.name).toBe('calculator');
+		expect(params.reasoningEffort).toBeUndefined();
+		expect(params.options.reasoningEffort).toBeUndefined();
+		expect(params.options.tools).toBeUndefined();
+	});
+
+	it('maps reasoningEffort none to think false', async () => {
+		chatMock.mockResolvedValue({
+			model: 'llama3.1',
+			done: true,
+			done_reason: 'stop',
+			message: { role: 'assistant', content: 'ok' },
+		});
+
+		const provider = new OllamaProvider(
+			'http://127.0.0.1:11434',
+			'llama3.1',
+			new NoopLogger()
+		);
+		await provider.sendConversation(
+			[{ role: 'user', content: 'hi' }],
+			{ reasoningEffort: 'none' }
+		);
+
+		const params = chatMock.mock.calls[0][0];
+		expect(params.think).toBe(false);
+	});
+
 	it('rejects tools on the structured path', async () => {
 		const provider = new OllamaProvider(
 			'http://127.0.0.1:11434',

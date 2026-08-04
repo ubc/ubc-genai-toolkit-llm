@@ -4,6 +4,7 @@ import { NoopLogger } from 'ubc-genai-toolkit-core';
 import type { Message } from '../src/types';
 
 const createMock = vi.fn();
+const parseMock = vi.fn();
 
 vi.mock('openai', () => {
 	class MockAPIError extends Error {
@@ -12,7 +13,7 @@ vi.mock('openai', () => {
 	class MockOpenAI {
 		static APIError = MockAPIError;
 		chat = { completions: { create: createMock } };
-		beta = { chat: { completions: { parse: vi.fn() } } };
+		beta = { chat: { completions: { parse: parseMock } } };
 		models = { list: vi.fn() };
 		embeddings = { create: vi.fn() };
 	}
@@ -25,8 +26,8 @@ vi.mock('openai/helpers/zod', () => ({
 
 import { OpenAIProvider } from '../src/providers/openai-provider';
 
-function makeProvider() {
-	return new OpenAIProvider('sk-test', 'gpt-4o', new NoopLogger());
+function makeProvider(defaultModel = 'gpt-4o') {
+	return new OpenAIProvider('sk-test', defaultModel, new NoopLogger());
 }
 
 const calculator = {
@@ -35,8 +36,21 @@ const calculator = {
 	parameters: z.object({ expression: z.string() }),
 };
 
+function mockStopResponse(model = 'gpt-4o') {
+	return {
+		id: 'chatcmpl-1',
+		created: 1,
+		model,
+		choices: [
+			{ finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
+		],
+		usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+	};
+}
+
 beforeEach(() => {
 	createMock.mockReset();
+	parseMock.mockReset();
 });
 
 describe('OpenAIProvider tool calling', () => {
@@ -165,5 +179,191 @@ describe('OpenAIProvider tool calling', () => {
 				{ tools: [calculator] }
 			)
 		).rejects.toThrowError(/structured/i);
+	});
+
+	it('maps reasoningEffort and keeps tools without leaking camelCase keys into rest', async () => {
+		createMock.mockResolvedValue(mockStopResponse('gpt-5-mini'));
+
+		const provider = makeProvider();
+		await provider.sendConversation(
+			[{ role: 'user', content: 'Explain quicksort.' }],
+			{
+				model: 'gpt-5-mini',
+				tools: [calculator],
+				reasoningEffort: 'low',
+				maxTokens: 1024,
+			}
+		);
+
+		const params = createMock.mock.calls[0][0];
+		expect(params.reasoning_effort).toBe('low');
+		expect(params.max_completion_tokens).toBe(1024);
+		expect(params.tools[0].function.name).toBe('calculator');
+		expect(params.reasoningEffort).toBeUndefined();
+		expect(params.toolChoice).toBeUndefined();
+	});
+});
+
+describe('OpenAIProvider option mapping', () => {
+	it('preserves BiocBot snake_case reasoning_effort and max_completion_tokens', async () => {
+		createMock.mockResolvedValue(mockStopResponse('gpt-5-nano'));
+
+		const provider = makeProvider();
+		await provider.sendConversation(
+			[{ role: 'user', content: 'hi' }],
+			{
+				model: 'gpt-5-nano',
+				reasoning_effort: 'low',
+				max_completion_tokens: 2000,
+			} as any
+		);
+
+		const params = createMock.mock.calls[0][0];
+		expect(params.reasoning_effort).toBe('low');
+		expect(params.max_completion_tokens).toBe(2000);
+		expect(params.max_tokens).toBeUndefined();
+	});
+
+	it('preserves BiocBot raw response_format passthrough', async () => {
+		createMock.mockResolvedValue(mockStopResponse('gpt-5-nano'));
+
+		const provider = makeProvider();
+
+		await provider.sendConversation(
+			[{ role: 'user', content: 'generate JSON' }],
+			{
+				model: 'gpt-5-nano',
+				reasoning_effort: 'low',
+				max_completion_tokens: 4000,
+				response_format: { type: 'json_object' },
+			} as any
+		);
+
+		const params = createMock.mock.calls[0][0];
+
+		expect(params.response_format).toEqual({
+			type: 'json_object',
+		});
+	});
+
+	it('maps older model maxTokens to max_tokens without reasoning', async () => {
+		createMock.mockResolvedValue(mockStopResponse('gpt-4.1-mini'));
+
+		const provider = makeProvider();
+		await provider.sendConversation(
+			[{ role: 'user', content: 'hi' }],
+			{ model: 'gpt-4.1-mini', maxTokens: 1000 }
+		);
+
+		const params = createMock.mock.calls[0][0];
+		expect(params.max_tokens).toBe(1000);
+		expect(params.max_completion_tokens).toBeUndefined();
+		expect(params.reasoning_effort).toBeUndefined();
+	});
+
+	it('maps GPT-5 camelCase reasoningEffort and maxTokens to wire fields', async () => {
+		createMock.mockResolvedValue(mockStopResponse('gpt-5-nano'));
+
+		const provider = makeProvider();
+		await provider.sendConversation(
+			[{ role: 'user', content: 'hi' }],
+			{ model: 'gpt-5-nano', reasoningEffort: 'low', maxTokens: 2000 }
+		);
+
+		const params = createMock.mock.calls[0][0];
+		expect(params.reasoning_effort).toBe('low');
+		expect(params.max_completion_tokens).toBe(2000);
+		expect(params.max_tokens).toBeUndefined();
+	});
+
+	it('prefers camelCase when both aliases are supplied', async () => {
+		createMock.mockResolvedValue(mockStopResponse('gpt-5-nano'));
+
+		const provider = makeProvider();
+		await provider.sendConversation(
+			[{ role: 'user', content: 'hi' }],
+			{
+				model: 'gpt-5-nano',
+				reasoningEffort: 'high',
+				reasoning_effort: 'low',
+				maxTokens: 111,
+				max_completion_tokens: 999,
+			} as any
+		);
+
+		const params = createMock.mock.calls[0][0];
+		expect(params.reasoning_effort).toBe('high');
+		expect(params.max_completion_tokens).toBe(111);
+	});
+
+	it('rejects unsupported model/effort combinations with a clear APIError', async () => {
+		const provider = makeProvider();
+		await expect(
+			provider.sendConversation(
+				[{ role: 'user', content: 'hi' }],
+				{ model: 'gpt-4.1-mini', reasoningEffort: 'low' }
+			)
+		).rejects.toThrowError(/does not support reasoningEffort/);
+	});
+
+	it('applies the same mapping on structured and streaming calls', async () => {
+		parseMock.mockResolvedValue({
+			id: 'chatcmpl-structured',
+			created: 1,
+			model: 'gpt-5-nano',
+			choices: [
+				{
+					finish_reason: 'stop',
+					message: {
+						role: 'assistant',
+						content: '{"a":"b"}',
+						parsed: { a: 'b' },
+					},
+				},
+			],
+			usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+		});
+
+		async function* fakeStream() {
+			yield { choices: [{ delta: { content: 'x' }, finish_reason: null }] };
+			yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+		}
+		createMock.mockResolvedValue(fakeStream());
+
+		const provider = makeProvider();
+		await provider.sendStructuredConversation(
+			[{ role: 'user', content: 'hi' }],
+			z.object({ a: z.string() }),
+			{ model: 'gpt-5-nano', reasoningEffort: 'minimal', maxTokens: 50 }
+		);
+		expect(parseMock.mock.calls[0][0].reasoning_effort).toBe('minimal');
+		expect(parseMock.mock.calls[0][0].max_completion_tokens).toBe(50);
+		expect(parseMock.mock.calls[0][0].stream).toBe(false);
+
+		await provider.streamConversation(
+			[{ role: 'user', content: 'hi' }],
+			() => {},
+			{ model: 'gpt-5-nano', reasoningEffort: 'low', maxTokens: 75 }
+		);
+		expect(createMock.mock.calls[0][0].reasoning_effort).toBe('low');
+		expect(createMock.mock.calls[0][0].max_completion_tokens).toBe(75);
+		expect(createMock.mock.calls[0][0].stream).toBe(true);
+	});
+
+	it('does not let passthrough fields override model, messages, or stream', async () => {
+		createMock.mockResolvedValue(mockStopResponse('gpt-4o'));
+
+		const provider = makeProvider();
+		const messages: Message[] = [{ role: 'user', content: 'real' }];
+		await provider.sendConversation(messages, {
+			model: 'gpt-4o',
+			messages: [{ role: 'user', content: 'hijack' }],
+			stream: true,
+		} as any);
+
+		const params = createMock.mock.calls[0][0];
+		expect(params.model).toBe('gpt-4o');
+		expect(params.messages).toEqual([{ role: 'user', content: 'real' }]);
+		expect(params.stream).toBe(false);
 	});
 });

@@ -32,7 +32,7 @@ const anthropic_mapping_1 = require("./anthropic-mapping");
  * Splits {@link LLMOptions} into known toolkit fields vs `rest` spread onto Anthropic requests.
  */
 function separateOptions(options = {}) {
-    const { model, temperature, maxTokens, systemPrompt, responseFormat, stream, 
+    const { model, temperature, maxTokens, systemPrompt, responseFormat, stream, reasoningEffort, 
     // Toolkit-managed: translated into Anthropic's native tool params, not forwarded raw in `...rest`.
     tools, toolChoice, 
     // OpenAI-only hint; Anthropic ignores it but we strip so it never lands in `...rest` and confuses the SDK.
@@ -44,11 +44,27 @@ function separateOptions(options = {}) {
         systemPrompt,
         responseFormat,
         stream,
+        reasoningEffort,
         tools,
         toolChoice,
         structuredOutputName: _structuredOutputName,
     };
     return { known, rest };
+}
+/** Maps toolkit `reasoningEffort` to Anthropic thinking/output_config without rewriting the value. */
+function anthropicReasoningFields(reasoningEffort) {
+    if (!reasoningEffort) {
+        return {};
+    }
+    if (reasoningEffort === 'none') {
+        return { thinking: { type: 'disabled' } };
+    }
+    return {
+        thinking: { type: 'adaptive' },
+        output_config: {
+            effort: reasoningEffort,
+        },
+    };
 }
 class AnthropicProvider {
     /**
@@ -130,6 +146,7 @@ class AnthropicProvider {
         const anthropicMessages = (0, anthropic_mapping_1.toAnthropicMessages)(messages);
         try {
             const { rest } = separateOptions(options);
+            const reasoningFields = anthropicReasoningFields(options?.reasoningEffort);
             // Construct parameters for the Anthropic API call.
             const params = {
                 model: model,
@@ -145,6 +162,7 @@ class AnthropicProvider {
                 tool_choice: (0, anthropic_mapping_1.toAnthropicToolChoice)(options?.toolChoice),
                 stream: false,
                 ...rest,
+                ...reasoningFields,
                 // TODO: Potentially map other options like stop_sequences if added to LLMOptions
             };
             const response = await this.client.messages.create(params);
@@ -180,6 +198,7 @@ class AnthropicProvider {
         const anthropicMessages = (0, anthropic_mapping_1.toAnthropicMessages)(messages);
         try {
             const { rest } = separateOptions(options);
+            const reasoningFields = anthropicReasoningFields(options?.reasoningEffort);
             // `parse` validates `parsed_output` against the Zod schema server-side (when supported); we still null-check below.
             const response = await this.client.messages.parse({
                 model,
@@ -188,10 +207,14 @@ class AnthropicProvider {
                 temperature: options?.temperature,
                 system: systemPrompt,
                 stream: false,
+                ...rest,
                 output_config: {
+                    ...(reasoningFields.output_config ?? {}),
                     format: (0, zod_1.zodOutputFormat)(schema),
                 },
-                ...rest,
+                ...(reasoningFields.thinking
+                    ? { thinking: reasoningFields.thinking }
+                    : {}),
             });
             // Successful HTTP does not guarantee parsed_output (e.g. stop before structured body); treat as hard failure for callers expecting T.
             if (response.parsed_output == null) {
@@ -234,6 +257,7 @@ class AnthropicProvider {
         const toolAccByIndex = new Map();
         let rawStopReason;
         const { rest } = separateOptions(options);
+        const reasoningFields = anthropicReasoningFields(options?.reasoningEffort);
         try {
             // Construct parameters, ensuring stream is set to true.
             const params = {
@@ -248,6 +272,7 @@ class AnthropicProvider {
                 tool_choice: (0, anthropic_mapping_1.toAnthropicToolChoice)(options?.toolChoice),
                 stream: true,
                 ...rest,
+                ...reasoningFields,
             };
             const stream = await this.client.messages.create(params);
             // Process the stream events asynchronously.

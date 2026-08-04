@@ -31,7 +31,7 @@ const ollama_mapping_1 = require("./ollama-mapping");
  * `options` object shape, and returns the remainder as `rest` for merging.
  */
 function separateOptions(options = {}) {
-    const { model, temperature, maxTokens, systemPrompt, responseFormat, stream, 
+    const { model, temperature, maxTokens, systemPrompt, responseFormat, stream, reasoningEffort, 
     // Not an Ollama generate field; strip so it cannot be forwarded inside `rest`.
     // Toolkit-managed: tools are translated natively; Ollama has no toolChoice
     // equivalent. Both are stripped so they never reach `rest`/`finalOptions`.
@@ -44,6 +44,7 @@ function separateOptions(options = {}) {
         systemPrompt,
         responseFormat,
         stream,
+        reasoningEffort,
         tools,
         toolChoice,
         structuredOutputName: _structuredOutputName,
@@ -59,6 +60,16 @@ function separateOptions(options = {}) {
         ollamaSpecific,
         rest,
     };
+}
+/** Maps toolkit `reasoningEffort` to Ollama top-level `think` (`false` or level string). */
+function ollamaThinkFromEffort(reasoningEffort) {
+    if (reasoningEffort === undefined) {
+        return undefined;
+    }
+    if (reasoningEffort === 'none') {
+        return false;
+    }
+    return reasoningEffort;
 }
 class OllamaProvider {
     /**
@@ -137,6 +148,7 @@ class OllamaProvider {
             const ollamaMessages = (0, ollama_mapping_1.toOllamaMessages)(messages);
             // Separate known, Ollama-specific, and passthrough options
             const { ollamaSpecific, rest } = separateOptions(options);
+            const think = ollamaThinkFromEffort(options?.reasoningEffort);
             // Merge Ollama-specific options with the rest of the passthrough options
             const finalOptions = { ...rest, ...ollamaSpecific };
             // Handle system prompt if not already in messages (from known options)
@@ -152,6 +164,7 @@ class OllamaProvider {
                 model: model,
                 messages: ollamaMessages,
                 stream: false,
+                ...(think !== undefined ? { think: think } : {}),
                 // `format: 'json'` is Ollama's loose JSON mode; structured chat uses a JSON Schema object instead (see sendStructuredConversation).
                 format: options?.responseFormat === 'json' ? 'json' : undefined,
                 tools: options?.tools && options.tools.length > 0
@@ -194,6 +207,7 @@ class OllamaProvider {
             const ollamaMessages = (0, ollama_mapping_1.toOllamaMessages)(messages);
             // Separate known, Ollama-specific, and passthrough options
             const { ollamaSpecific, rest } = separateOptions(options);
+            const think = ollamaThinkFromEffort(options?.reasoningEffort);
             // Merge Ollama-specific options with the rest of the passthrough options
             const finalOptions = { ...rest, ...ollamaSpecific };
             // Handle system prompt if not already in messages (from known options)
@@ -211,6 +225,7 @@ class OllamaProvider {
                 model,
                 messages: ollamaMessages,
                 stream: false,
+                ...(think !== undefined ? { think: think } : {}),
                 format: jsonSchema,
                 options: finalOptions,
             });
@@ -267,6 +282,7 @@ class OllamaProvider {
             ...(0, ollama_mapping_1.ollamaImages)(msg),
         }));
         const { ollamaSpecific, rest } = separateOptions(options);
+        const think = ollamaThinkFromEffort(options?.reasoningEffort);
         const finalOptions = { ...rest, ...ollamaSpecific };
         if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
             ollamaMessages.unshift({ role: 'system', content: options.systemPrompt });
@@ -284,6 +300,7 @@ class OllamaProvider {
                 model: model,
                 messages: ollamaMessages,
                 stream: true,
+                ...(think !== undefined ? { think: think } : {}),
                 // Same as non-stream: JSON mode is separate from JSON Schema structured output.
                 format: options?.responseFormat === 'json' ? 'json' : undefined,
                 tools: options?.tools && options.tools.length > 0
