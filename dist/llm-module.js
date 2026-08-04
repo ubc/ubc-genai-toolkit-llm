@@ -208,12 +208,20 @@ class LLMModule {
      */
     mergeOptions(options, overrides) {
         const defaultOptions = this.config.defaultOptions || {};
-        return {
+        const merged = {
             model: this.config.defaultModel,
             ...defaultOptions,
             ...options,
             ...overrides,
         };
+        if (merged.reasoningEffort) {
+            this.logger.debug('reasoningEffort set on request', {
+                provider: this.config.provider,
+                model: merged.model,
+                reasoningEffort: merged.reasoningEffort,
+            });
+        }
+        return merged;
     }
     /**
      * Merge structured output options with defaults

@@ -25,14 +25,18 @@
 
 ---
 
+
+
 ### Task 1: Test infrastructure + core tool-calling types
 
 **Files:**
+
 - Modify: `package.json` (add vitest devDependency + `test` script)
 - Modify: `src/types.ts` (new types; widen `Message`, `LLMOptions`, `LLMResponse`)
 - Test: `test/types.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces (later tasks rely on these exact names):
 
@@ -287,15 +291,19 @@ git commit -m "feat: add tool-calling types and vitest test infrastructure"
 
 ---
 
+
+
 ### Task 2: Shared OpenAI-compatible mapping module
 
 The OpenAI and UBC LLM Sandbox providers currently duplicate `toOpenAIContent` and `separateOpenAIOptions`. This task creates one shared, pure, unit-testable mapping module both will use, including the new tool mappings. (Provider files are not modified until Tasks 3–4.)
 
 **Files:**
+
 - Create: `src/providers/openai-compat-mapping.ts`
 - Test: `test/openai-compat-mapping.test.ts`
 
 **Interfaces:**
+
 - Consumes: `Message`, `ToolDefinition`, `ToolCall`, `StopReason`, `LLMOptions` from `../types` (Task 1); `APIError` from `ubc-genai-toolkit-core`; `zodToJsonSchema` from `zod-to-json-schema` (existing dep); OpenAI SDK types.
 - Produces (Tasks 3–4 import these exact names):
 
@@ -682,6 +690,8 @@ export function mapOpenAIFinishReason(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
+
+
 Run: `npx vitest run test/openai-compat-mapping.test.ts`
 Expected: PASS (all tests).
 
@@ -694,13 +704,17 @@ git commit -m "feat: add shared OpenAI-compatible tool-calling mapping module"
 
 ---
 
+
+
 ### Task 3: OpenAI provider tool support
 
 **Files:**
+
 - Modify: `src/providers/openai-provider.ts`
 - Test: `test/openai-provider.test.ts`
 
 **Interfaces:**
+
 - Consumes: everything exported by `./openai-compat-mapping` (Task 2); types from Task 1.
 - Produces: `OpenAIProvider.sendConversation` accepts `options.tools`/`options.toolChoice` and returns `toolCalls`/`stopReason` on `LLMResponse`; `streamConversation` accumulates tool-call deltas into the final response; `sendStructuredConversation` rejects `options.tools` with `APIError` 400. No public signature changes.
 
@@ -885,7 +899,7 @@ describe('OpenAIProvider tool calling', () => {
 Run: `npx vitest run test/openai-provider.test.ts`
 Expected: FAIL — `params.tools` undefined, `response.toolCalls` undefined, structured path resolves instead of rejecting, streaming test returns no `toolCalls`.
 
-- [ ] **Step 3: Implement in `src/providers/openai-provider.ts`**
+- [ ] **Step 3: Implement in** `src/providers/openai-provider.ts`
 
 (a) **Replace the local helpers with the shared module.** Delete the local `separateOpenAIOptions` function and the local `toOpenAIContent` function; add to the imports:
 
@@ -902,7 +916,7 @@ import {
 
 Also add `StopReason` and `ToolCall` to the `../types` import if the compiler asks for them (they are only needed via `LLMResponse`, so usually not).
 
-(b) **`sendConversation`:** replace the inline `messages.map(...)` block with:
+(b) `sendConversation`**:** replace the inline `messages.map(...)` block with:
 
 ```ts
 			const openaiMessages = toOpenAIMessages(messages);
@@ -919,7 +933,7 @@ and extend the `this.client.chat.completions.create({...})` params (after `respo
 				tool_choice: options?.toolChoice,
 ```
 
-(c) **`normalizeResponse`:** replace the method body with:
+(c) `normalizeResponse`**:** replace the method body with:
 
 ```ts
 		const choice = response.choices[0];
@@ -942,7 +956,7 @@ and extend the `this.client.chat.completions.create({...})` params (after `respo
 		};
 ```
 
-(d) **`sendStructuredConversation`:** add as the first statement inside the `try`:
+(d) `sendStructuredConversation`**:** add as the first statement inside the `try`:
 
 ```ts
 			// Tools and structured output are mutually exclusive in 0.4.0: run the
@@ -958,7 +972,7 @@ and extend the `this.client.chat.completions.create({...})` params (after `respo
 
 Also update the message mapping in `sendStructuredConversation` and `streamConversation` to use `toOpenAIMessages(messages)` (replacing the inline maps).
 
-(e) **`streamConversation`:** pass `tools`/`tool_choice` the same way as (b), and replace the accumulation loop:
+(e) `streamConversation`**:** pass `tools`/`tool_choice` the same way as (b), and replace the accumulation loop:
 
 ```ts
 			let fullContent = '';
@@ -1032,15 +1046,19 @@ git commit -m "feat: tool calling in OpenAI provider (send + stream + structured
 
 ---
 
+
+
 ### Task 4: UBC LLM Sandbox provider tool support
 
 The sandbox is a LiteLLM OpenAI-compatible proxy; changes mirror Task 3 exactly, reusing the shared mapping module.
 
 **Files:**
+
 - Modify: `src/providers/ubc-llm-sandbox-provider.ts`
 - Test: `test/ubc-llm-sandbox-provider.test.ts`
 
 **Interfaces:**
+
 - Consumes: `./openai-compat-mapping` exports (Task 2).
 - Produces: same behavior contract as Task 3 for `UbcLlmSandboxProvider`. Its `sendStructuredConversation` already throws 501 unconditionally — leave it untouched.
 
@@ -1125,7 +1143,7 @@ describe('UbcLlmSandboxProvider tool calling', () => {
 Run: `npx vitest run test/ubc-llm-sandbox-provider.test.ts`
 Expected: FAIL — `tools` undefined on the call params, `toolCalls` undefined on the response.
 
-- [ ] **Step 3: Implement in `src/providers/ubc-llm-sandbox-provider.ts`**
+- [ ] **Step 3: Implement in** `src/providers/ubc-llm-sandbox-provider.ts`
 
 (a) **Use the shared mapping module.** Delete the local `separateOpenAIOptions` and `toOpenAIContent` functions; add to the imports:
 
@@ -1140,7 +1158,7 @@ import {
 } from './openai-compat-mapping';
 ```
 
-(b) **`sendConversation`:** replace the inline `messages.map(...)` block with:
+(b) `sendConversation`**:** replace the inline `messages.map(...)` block with:
 
 ```ts
 			const openaiMessages = toOpenAIMessages(messages);
@@ -1157,7 +1175,7 @@ and extend the `this.client.chat.completions.create({...})` params (after `respo
 				tool_choice: options?.toolChoice,
 ```
 
-(c) **`normalizeResponse`:** replace the method body with:
+(c) `normalizeResponse`**:** replace the method body with:
 
 ```ts
 		const choice = response.choices[0];
@@ -1180,7 +1198,7 @@ and extend the `this.client.chat.completions.create({...})` params (after `respo
 		};
 ```
 
-(d) **`streamConversation`:** replace the inline `messages.map(...)` with `toOpenAIMessages(messages)`, add `tools`/`tool_choice` as in (b), delete the now-dead `finalResponse` variable and its speculative comment block, and replace the accumulation loop + return with:
+(d) `streamConversation`**:** replace the inline `messages.map(...)` with `toOpenAIMessages(messages)`, add `tools`/`tool_choice` as in (b), delete the now-dead `finalResponse` variable and its speculative comment block, and replace the accumulation loop + return with:
 
 ```ts
 			let fullContent = '';
@@ -1239,7 +1257,7 @@ and extend the `this.client.chat.completions.create({...})` params (after `respo
 			};
 ```
 
-(e) **`sendStructuredConversation`:** no change (it already throws 501 unconditionally).
+(e) `sendStructuredConversation`**:** no change (it already throws 501 unconditionally).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1257,13 +1275,17 @@ git commit -m "feat: tool calling in UBC LLM Sandbox provider"
 
 ---
 
+
+
 ### Task 5: Anthropic mapping module
 
 **Files:**
+
 - Create: `src/providers/anthropic-mapping.ts`
 - Test: `test/anthropic-mapping.test.ts`
 
 **Interfaces:**
+
 - Consumes: types from Task 1; `APIError` from core; `zodToJsonSchema`; Anthropic SDK types (`MessageParam`, `ContentBlockParam`, `Tool`, `ToolChoice` from `@anthropic-ai/sdk/resources/messages`).
 - Produces (Task 6 imports these exact names):
 
@@ -1615,6 +1637,8 @@ export function mapAnthropicStopReason(
 }
 ```
 
+
+
 Note: if the installed `@anthropic-ai/sdk` version does not export a `ToolChoice` type from `@anthropic-ai/sdk/resources/messages`, use `MessageCreateParams['tool_choice']` instead:
 
 ```ts
@@ -1636,13 +1660,17 @@ git commit -m "feat: add Anthropic tool-calling mapping module"
 
 ---
 
+
+
 ### Task 6: Anthropic provider tool support
 
 **Files:**
+
 - Modify: `src/providers/anthropic-provider.ts`
 - Test: `test/anthropic-provider.test.ts`
 
 **Interfaces:**
+
 - Consumes: `./anthropic-mapping` exports (Task 5).
 - Produces: `AnthropicProvider.sendConversation` accepts tools and returns `toolCalls`/`stopReason`; `streamConversation` accumulates `tool_use` blocks (via `input_json_delta`); `sendStructuredConversation` rejects `options.tools` with 400.
 
@@ -1774,7 +1802,7 @@ describe('AnthropicProvider tool calling', () => {
 Run: `npx vitest run test/anthropic-provider.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement in `src/providers/anthropic-provider.ts`**
+- [ ] **Step 3: Implement in** `src/providers/anthropic-provider.ts`
 
 (a) Delete the local `toAnthropicContent` function; add imports:
 
@@ -1905,6 +1933,8 @@ and build the final response:
 
 - [ ] **Step 4: Run tests + build**
 
+
+
 Run: `npx vitest run && npm run build`
 Expected: all tests PASS; build exits 0.
 
@@ -1917,13 +1947,17 @@ git commit -m "feat: tool calling in Anthropic provider (send + stream + structu
 
 ---
 
+
+
 ### Task 7: Ollama mapping module
 
 **Files:**
+
 - Create: `src/providers/ollama-mapping.ts`
 - Test: `test/ollama-mapping.test.ts`
 
 **Interfaces:**
+
 - Consumes: types from Task 1; `zodToJsonSchema`.
 - Produces (Task 8 imports these exact names):
 
@@ -2174,6 +2208,8 @@ export function mapOllamaDoneReason(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
+
+
 Run: `npx vitest run test/ollama-mapping.test.ts`
 Expected: PASS.
 
@@ -2186,13 +2222,17 @@ git commit -m "feat: add Ollama tool-calling mapping module"
 
 ---
 
+
+
 ### Task 8: Ollama provider tool support
 
 **Files:**
+
 - Modify: `src/providers/ollama-provider.ts`
 - Test: `test/ollama-provider.test.ts`
 
 **Interfaces:**
+
 - Consumes: `./ollama-mapping` exports (Task 7).
 - Produces: `OllamaProvider.sendConversation` accepts tools and returns `toolCalls`/`stopReason`; `streamConversation` collects streamed `tool_calls`; `toolChoice` is ignored with a debug log (Ollama has no equivalent); `sendStructuredConversation` rejects `options.tools` with 400.
 
@@ -2319,7 +2359,7 @@ describe('OllamaProvider tool calling', () => {
 Run: `npx vitest run test/ollama-provider.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement in `src/providers/ollama-provider.ts`**
+- [ ] **Step 3: Implement in** `src/providers/ollama-provider.ts`
 
 (a) Delete the local `ollamaImages` function; add imports:
 
@@ -2419,14 +2459,18 @@ git commit -m "feat: tool calling in Ollama provider (send + stream + structured
 
 ---
 
+
+
 ### Task 9: `getDisplayMessages` helper + exports
 
 **Files:**
+
 - Create: `src/display.ts`
 - Modify: `src/index.ts`
 - Test: `test/display.test.ts`
 
 **Interfaces:**
+
 - Consumes: `Message` from `./types`.
 - Produces: `export function getDisplayMessages(messages: Message[]): Message[]` — exported from the package root.
 
@@ -2529,9 +2573,12 @@ git commit -m "feat: add getDisplayMessages helper for tool-aware histories"
 
 ---
 
+
+
 ### Task 10: Version 0.4.0, CHANGELOG, readme tool-calling docs
 
 **Files:**
+
 - Modify: `package.json` (version)
 - Modify: `CHANGELOG.md`
 - Modify: `readme.md`
@@ -2560,7 +2607,7 @@ In `CHANGELOG.md`, insert directly below the header block (above the `## [0.3.0]
 
 In `readme.md`, add a `## Tool Calling` section (after the existing conversation/structured-output documentation — inspect the file and place it beside its peers):
 
-````markdown
+```markdown
 ## Tool Calling
 
 Tools let the model request that *your code* run something (a calculation, a
@@ -2633,7 +2680,7 @@ Notes:
 
 The upcoming `ubc-genai-toolkit-agents` module automates this loop; use this
 API directly when you need full control.
-````
+```
 
 - [ ] **Step 4: Verify build + tests still pass**
 
@@ -2649,13 +2696,17 @@ git commit -m "docs: document tool calling; bump to 0.4.0"
 
 ---
 
+
+
 ### Task 11: Example app — tool-calling demo
 
 **Files:**
+
 - Create: `example/src/tool-calling-demo.ts`
 - Modify: `example/package.json` (add `tool-demo` script)
 
 **Interfaces:**
+
 - Consumes: the public 0.4.0 API only (`LLMModule`, `ToolDefinition`, `Message`, `getDisplayMessages`), plus the example's existing `loadConfig()` from `example/src/config.ts`.
 
 - [ ] **Step 1: Write the demo**
@@ -2796,6 +2847,8 @@ git commit -m "feat: add tool-calling demo to example app"
 
 ---
 
+
+
 ### Task 12: Final verification
 
 - [ ] **Step 1: Full clean build + test suite**
@@ -2823,17 +2876,15 @@ This step validates the release against a real provider and is **not complete un
 npm run tool-demo
 ```
 
-2. If there is no `.env` (or the run fails on authentication), **stop and ask the user** to either:
-   - add credentials to `example/.env` (variables documented in `example/src/config.ts`) so you can run it, or
-   - run the demo themselves and share the output — they can type `! cd example && npm run tool-demo` directly in this session so the output lands in the conversation.
-
-3. Validation criteria (all must appear in the observed output):
-   - at least one `[tool call] calculator({"expression": ...})` line — the model actually requested the tool;
-   - a matching `[tool result] 127.05` (or arithmetically equivalent) line — the toolkit executed it and fed it back;
-   - a final assistant answer containing ~127 — the model used the result;
-   - the closing "What an end user would see" section lists only `user:`/`assistant:` lines — `getDisplayMessages` filtered the tool traffic.
-
-4. If any criterion fails, treat it as a defect: debug and fix before proceeding (a model that answers without calling the tool may just need a more tool-capable model in `.env` — ask the user; wrong arithmetic or leaked tool messages are code bugs).
+1. If there is no `.env` (or the run fails on authentication), **stop and ask the user** to either:
+  - add credentials to `example/.env` (variables documented in `example/src/config.ts`) so you can run it, or
+  - run the demo themselves and share the output — they can type `! cd example && npm run tool-demo` directly in this session so the output lands in the conversation.
+2. Validation criteria (all must appear in the observed output):
+  - at least one `[tool call] calculator({"expression": ...})` line — the model actually requested the tool;
+  - a matching `[tool result] 127.05` (or arithmetically equivalent) line — the toolkit executed it and fed it back;
+  - a final assistant answer containing ~127 — the model used the result;
+  - the closing "What an end user would see" section lists only `user:`/`assistant:` lines — `getDisplayMessages` filtered the tool traffic.
+3. If any criterion fails, treat it as a defect: debug and fix before proceeding (a model that answers without calling the tool may just need a more tool-capable model in `.env` — ask the user; wrong arithmetic or leaked tool messages are code bugs).
 
 Only after the criteria pass may Task 12 — and the plan — be marked complete.
 
