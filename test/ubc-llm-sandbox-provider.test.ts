@@ -124,6 +124,35 @@ describe('UbcLlmSandboxProvider option mapping', () => {
 		expect(params.stream).toBe(false);
 	});
 
+	it('preserves BiocBot raw response_format passthrough', async () => {
+		createMock.mockResolvedValue({
+			id: 'x',
+			created: 1,
+			model: 'gpt-5-nano',
+			choices: [
+				{ finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
+			],
+		});
+
+		const provider = makeProvider();
+
+		await provider.sendConversation(
+			[{ role: 'user', content: 'generate JSON' }],
+			{
+				model: 'gpt-5-nano',
+				reasoning_effort: 'low',
+				max_completion_tokens: 4000,
+				response_format: { type: 'json_object' },
+			} as any
+		);
+
+		const params = createMock.mock.calls[0][0];
+
+		expect(params.response_format).toEqual({
+			type: 'json_object',
+		});
+	});
+
 	it('maps older-model maxTokens to max_tokens on stream', async () => {
 		async function* fakeStream() {
 			yield { choices: [{ delta: { content: 'a' }, finish_reason: null }] };

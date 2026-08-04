@@ -224,6 +224,28 @@ describe('OpenAIProvider option mapping', () => {
 		expect(params.max_tokens).toBeUndefined();
 	});
 
+	it('preserves BiocBot raw response_format passthrough', async () => {
+		createMock.mockResolvedValue(mockStopResponse('gpt-5-nano'));
+
+		const provider = makeProvider();
+
+		await provider.sendConversation(
+			[{ role: 'user', content: 'generate JSON' }],
+			{
+				model: 'gpt-5-nano',
+				reasoning_effort: 'low',
+				max_completion_tokens: 4000,
+				response_format: { type: 'json_object' },
+			} as any
+		);
+
+		const params = createMock.mock.calls[0][0];
+
+		expect(params.response_format).toEqual({
+			type: 'json_object',
+		});
+	});
+
 	it('maps older model maxTokens to max_tokens without reasoning', async () => {
 		createMock.mockResolvedValue(mockStopResponse('gpt-4.1-mini'));
 

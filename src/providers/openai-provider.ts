@@ -144,17 +144,24 @@ export class OpenAIProvider implements Provider {
 				...completionFields,
 				model,
 				messages: openaiMessages,
-				// OpenAI JSON mode is opt-in via response_format; omit entirely when not requested so the model stays unconstrained.
-				response_format:
-					known.responseFormat === 'json'
-						? { type: 'json_object' }
-						: undefined,
+				// Only set response_format when canonical responseFormat was provided so raw
+				// snake_case passthrough (e.g. BiocBot) in `rest` is not overwritten by undefined.
+				...(known.responseFormat !== undefined
+					? {
+							response_format:
+								known.responseFormat === 'json'
+									? { type: 'json_object' }
+									: undefined,
+						}
+					: {}),
 				// Tool calling: translate toolkit definitions into OpenAI function tools.
 				tools:
 					known.tools && known.tools.length > 0
 						? toOpenAITools(known.tools)
 						: undefined,
-				tool_choice: known.toolChoice,
+				...(known.toolChoice !== undefined
+					? { tool_choice: known.toolChoice }
+					: {}),
 				// Explicit false: callers might pass `stream` in `rest`; we need a non-streaming completion for normalizeResponse.
 				stream: false,
 			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
