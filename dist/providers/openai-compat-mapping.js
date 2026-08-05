@@ -85,14 +85,17 @@ function getOpenAIReasoningCapability(model) {
  * @throws {APIError} 400 for unsupported model+effort, invalid effort, or
  * required capability with no effort supplied.
  */
-function buildOpenAICompatCompletionFields(model, known = {}) {
-    const capability = getOpenAIReasoningCapability(model);
+function buildOpenAICompatCompletionFields(model, known = {}, options = {}) {
+    // The model's own API decides which token field it understands...
+    const tokenCapability = getOpenAIReasoningCapability(model);
+    // ...while the caller may widen who is allowed to reason (see options).
+    const capability = options.reasoningCapability ?? tokenCapability;
     const fields = {};
     if (known.temperature !== undefined) {
         fields.temperature = known.temperature;
     }
     if (known.maxTokens !== undefined) {
-        if (capability === 'optional' || capability === 'required') {
+        if (tokenCapability === 'optional' || tokenCapability === 'required') {
             fields.max_completion_tokens = known.maxTokens;
         }
         else {

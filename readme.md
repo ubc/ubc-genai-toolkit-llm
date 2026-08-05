@@ -81,11 +81,15 @@ const ollamaConfig: LLMConfig = {
 };
 
 // UBC LLM Sandbox (using an OpenAI-compatible API)
+import { UBC_LLM_SANDBOX_ENDPOINTS, UBC_LLM_SANDBOX_MODELS } from 'ubc-genai-toolkit-llm';
+
 const ubcSandboxConfig: LLMConfig = {
 	provider: 'ubc-llm-sandbox',
 	apiKey: process.env.UBC_LLM_SANDBOX_API_KEY, // Use environment variables
-	endpoint: process.env.UBC_LLM_SANDBOX_ENDPOINT, // Use environment variables
-	defaultModel: 'llama3.1', // Example model available in the sandbox
+	// 'https://ai-stg.apps.ctlt.ubc.ca/v1' — see UBC LLM Sandbox Provider below
+	endpoint: UBC_LLM_SANDBOX_ENDPOINTS.staging,
+	defaultModel: UBC_LLM_SANDBOX_MODELS.chat, // 'qwen3.6-35b-a3b'
+	embeddingModel: UBC_LLM_SANDBOX_MODELS.embedding, // 'qwen3-embedding-0.6b'
 	logger: new ConsoleLogger(),
 };
 
@@ -107,7 +111,7 @@ const config: LLMConfig = {
 	provider: 'ubc-llm-sandbox', // Or 'openai', 'anthropic', 'ollama'
 	apiKey: process.env.UBC_LLM_SANDBOX_API_KEY,
 	endpoint: process.env.UBC_LLM_SANDBOX_ENDPOINT,
-	defaultModel: 'llama3.1', // Ensure this model is available in the sandbox
+	defaultModel: 'qwen3.6-35b-a3b', // Ensure this model is available in the sandbox
 	logger: new ConsoleLogger(),
 };
 
@@ -211,6 +215,11 @@ Use the unified `reasoningEffort` option on `LLMOptions`. Each provider maps it 
 |---|---|---|---|
 | gpt-4o-mini | Yes | No | [GPT-4o mini](https://developers.openai.com/api/docs/models/gpt-4o-mini) |
 | gpt-5-mini | No (when reasoning active) | Yes — `minimal`, `low`, `medium`, `high` | [GPT-5 mini](https://developers.openai.com/api/docs/models/gpt-5-mini) |
+| gpt-oss-120b (UBC LLM Sandbox) | Yes | Yes — `low`, `medium`, `high` (others clamped) | [UBC LLM Sandbox Provider](#ubc-llm-sandbox-provider) |
+
+The one exception to "not rewritten by this module" is the UBC LLM Sandbox,
+which clamps efforts onto the target model's native scale — see
+[UBC LLM Sandbox Provider](#ubc-llm-sandbox-provider).
 
 **Usage (OpenAI gpt-5-mini):**
 
@@ -412,10 +421,96 @@ All providers implement the `Provider` interface defined in `./src/providers/pro
 
 ### UBC LLM Sandbox Provider
 
--   Connects to a service providing an OpenAI-compatible API (like one hosted with LiteLLM).
+-   Connects to a service providing an OpenAI-compatible API (hosted with LiteLLM).
 -   Requires `apiKey`, `endpoint`, and `defaultModel` in configuration.
+-   Set `embeddingModel` if you plan to call `embed()`. It falls back to `nomic-embed-text` (and warns) for backwards compatibility, which is unlikely to be what you want on the current deployment.
 -   See `./src/providers/ubc-llm-sandbox-provider.ts`.
--   Available Models: Depends on the models configured and available in the specific UBC LLM Sandbox deployment. Use `getAvailableModels()` to query the endpoint.
+
+#### Endpoints
+
+Both environments run the same service and the same model roster; production is
+simply the staging URL without `-stg`. Exported as `UBC_LLM_SANDBOX_ENDPOINTS`:
+
+| Environment  | Base URL                                |
+| ------------ | --------------------------------------- |
+| `staging`    | `https://ai-stg.apps.ctlt.ubc.ca/v1`    |
+| `production` | `https://ai.apps.ctlt.ubc.ca/v1`        |
+
+The `endpoint` you configure is normalized before use, so a bare host
+(`https://ai-stg.apps.ctlt.ubc.ca`), a trailing slash, or a full request URL
+copied out of the sandbox docs (`.../v1/chat/completions`) all resolve to the
+same API root. Requesting a key: <https://developer.ubc.ca/sandbox/llm>.
+
+#### Models
+
+Exported as `UBC_LLM_SANDBOX_MODELS`. This is a convenience roster, not a
+validation allowlist — the sandbox catalogue changes without a toolkit release,
+so call `getAvailableModels()` for the live list.
+
+| Model                 | Role      | Notes                                                          |
+| --------------------- | --------- | -------------------------------------------------------------- |
+| `gpt-oss-120b`        | Reasoning | Takes `reasoningEffort` — `low`, `medium`, `high`. Tool calling works. |
+| `qwen3.6-35b-a3b`     | Chat      | Thinks by default — see below. Tool calling needs `toolChoice: 'required'`. |
+| `qwen3-embedding-0.6b`| Embedding | 1024 dimensions. Set as `embeddingModel` to use `embed()`.      |
+
+#### Reasoning on sandbox models
+
+`reasoningEffort` is forwarded for self-hosted sandbox models rather than
+rejected, and the toolkit translates it to whatever mechanism the target model
+actually uses. OpenAI models proxied through the sandbox keep OpenAI's own
+rules, so `reasoningEffort` on `gpt-4o` still fails fast with a `400`.
+
+**`gpt-oss-120b`** reads `reasoning_effort` and accepts only `low`, `medium`,
+`high` — the gateway returns `400` for anything else. Values outside that scale
+are clamped rather than rejected: `none`/`minimal` → `low`, `xhigh`/`max` → `high`.
+
+```typescript
+const response = await llm.sendMessage('Explain quicksort.', {
+	model: 'gpt-oss-120b',
+	reasoningEffort: 'medium',
+	maxTokens: 2048,
+});
+```
+
+**`qwen3.6-35b-a3b` thinks by default**, and its chain of thought is billed
+against `maxTokens` *before* any visible content is produced. A request with a
+tight budget therefore comes back with `stopReason: 'length'` and an **empty
+string** — the tokens were all spent thinking. Measured on staging, the same
+small JSON request cost ~1000 completion tokens with thinking on and 39 with it
+off.
+
+Qwen3 ignores `reasoning_effort`; thinking is a chat-template flag. Pass
+`reasoningEffort: 'none'` and the provider translates it for you:
+
+```typescript
+// Sends chat_template_kwargs: { enable_thinking: false }
+const response = await llm.sendMessage('Return a JSON object with ...', {
+	model: 'qwen3.6-35b-a3b',
+	reasoningEffort: 'none',
+	maxTokens: 512,
+});
+```
+
+So: either turn thinking off, or budget several thousand `maxTokens`. Leaving
+thinking on with a small budget is the one combination that silently returns
+nothing. An explicit `chat_template_kwargs` of your own always takes precedence.
+
+#### Tool calling
+
+`gpt-oss-120b` works with the default `toolChoice: 'auto'`.
+
+`qwen3.6-35b-a3b` currently requires `toolChoice: 'required'`. With `'auto'`
+the model emits its tool call as XML in the message body
+(`<tool_call><function=...>`) rather than as a structured `tool_calls` array, so
+`response.toolCalls` comes back empty. This is a server-side tool-call-parser
+mismatch in the sandbox's vLLM configuration, not a model limitation — with
+`'required'` the same request returns a correct `tool_calls` payload.
+
+#### JSON output
+
+`response_format: { type: 'json_object' }` and `{ type: 'json_schema', ... }`
+both work. On `qwen3.6-35b-a3b`, combine them with `reasoningEffort: 'none'` or
+a large `maxTokens`, for the reason described above.
 
 ## Error Handling
 

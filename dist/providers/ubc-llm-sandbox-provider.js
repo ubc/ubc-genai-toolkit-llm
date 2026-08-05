@@ -18,10 +18,16 @@ exports.UbcLlmSandboxProvider = void 0;
  * - Uses an API key for authentication.
  * - Supports standard chat completion (`sendMessage`, `sendConversation`).
  * - Supports streaming chat completion (`streamConversation`).
+ * - Supports tool calling and multi-modal (image) messages.
+ * - Supports reasoning models via `reasoningEffort` (e.g. `gpt-oss-120b`).
  * - Supports text embedding generation (`embed`).
  * - Maps UBC LLM Sandbox API responses and errors to the toolkit's standard interfaces.
  * - Requires an explicit endpoint URL during instantiation, unlike some other providers.
- * - Does not support structured output (Coming soon)
+ * - Does not support Zod structured output (Coming soon)
+ *
+ * The 2026 sandbox deployment lives at `ai.apps.ctlt.ubc.ca` (production) and
+ * `ai-stg.apps.ctlt.ubc.ca` (staging) — see {@link UBC_LLM_SANDBOX_ENDPOINTS}
+ * and {@link UBC_LLM_SANDBOX_MODELS} for the current URLs and model roster.
  *
  * @see {Provider} Interface definition for LLM providers.
  * @see {@link https://developer.ubc.ca/sandbox/llm} For more information about the UBC LLM Sandbox.
@@ -29,6 +35,15 @@ exports.UbcLlmSandboxProvider = void 0;
 const openai_1 = __importDefault(require("openai"));
 const ubc_genai_toolkit_core_1 = require("ubc-genai-toolkit-core");
 const openai_compat_mapping_1 = require("./openai-compat-mapping");
+const ubc_llm_sandbox_config_1 = require("./ubc-llm-sandbox-config");
+/**
+ * Embedding model used when none is configured.
+ *
+ * Kept from earlier sandbox deployments so existing callers are not broken; new
+ * code should set `embeddingModel` explicitly (see
+ * {@link UBC_LLM_SANDBOX_MODELS}).
+ */
+const LEGACY_DEFAULT_EMBEDDING_MODEL = 'nomic-embed-text';
 /**
  * Provides access to Large Language Models (LLMs) via the UBC LLM Sandbox service.
  *
@@ -53,31 +68,71 @@ class UbcLlmSandboxProvider {
      * An optional embedding model can also be specified.
      *
      * @param {string} apiKey - The API key for accessing the UBC LLM Sandbox.
-     * @param {string} endpoint - The base URL of the UBC LLM Sandbox API endpoint. This is mandatory.
+     * @param {string} endpoint - The base URL of the UBC LLM Sandbox API endpoint. This is
+     *   mandatory. It is normalized via {@link normalizeSandboxEndpoint}, so the documented
+     *   request URL (`.../v1/chat/completions`) and the bare host both resolve to the API root.
      * @param {string} defaultModel - The identifier of the default LLM to use for chat completions if not specified in options.
      * @param {LoggerInterface} logger - An instance of a logger conforming to the LoggerInterface for logging messages.
      * @param {object} [options] - Optional configuration settings.
      * @param {string} [options.embeddingModel] - The identifier of the default model to use for embeddings if not specified in options.
      * @throws {APIError} If the endpoint URL is not provided.
+     * @throws {ConfigurationError} If the endpoint URL is not a valid absolute URL.
      */
     constructor(apiKey, endpoint, // Endpoint is mandatory for this provider
     defaultModel, logger, options) {
         if (!endpoint) {
             throw new ubc_genai_toolkit_core_1.APIError('Endpoint is required for UBC LLM Sandbox provider', 400);
         }
+        // Accept the endpoint spellings people actually paste from the sandbox docs.
+        const baseURL = (0, ubc_llm_sandbox_config_1.normalizeSandboxEndpoint)(endpoint);
         this.client = new openai_1.default({
             apiKey,
-            baseURL: endpoint, // Use the provided endpoint
+            baseURL,
         });
-        this.endpoint = endpoint;
+        this.endpoint = baseURL;
         this.defaultModel = defaultModel;
         this.embeddingModel = options?.embeddingModel;
         this.logger = logger;
         this.logger.debug('UbcLlmSandboxProvider initialized', {
-            endpoint,
+            endpoint: baseURL,
+            configuredEndpoint: endpoint,
             defaultModel,
             embeddingModel: this.embeddingModel,
         });
+    }
+    /**
+     * Builds the token / reasoning / temperature slice of a completion request
+     * under the sandbox's rules rather than OpenAI's.
+     *
+     * Three sandbox-specific adjustments happen here: self-hosted models are
+     * allowed to reason (OpenAI's mapping only recognizes `gpt-5`/o-series),
+     * efforts outside a model's native scale are clamped instead of being
+     * rejected by the gateway, and models that toggle thinking through their chat
+     * template rather than `reasoning_effort` get `chat_template_kwargs` instead.
+     *
+     * @see resolveSandboxReasoning
+     * @private
+     */
+    buildCompletionFields(model, known, rest) {
+        const { reasoningEffort, chatTemplateKwargs } = (0, ubc_llm_sandbox_config_1.resolveSandboxReasoning)(model, known.reasoningEffort);
+        if (reasoningEffort !== known.reasoningEffort) {
+            this.logger.debug('Adjusted reasoning request for UBC LLM Sandbox model', {
+                model,
+                requested: known.reasoningEffort,
+                sentEffort: reasoningEffort,
+                chatTemplateKwargs,
+            });
+        }
+        const fields = (0, openai_compat_mapping_1.buildOpenAICompatCompletionFields)(model, { ...known, reasoningEffort }, { reasoningCapability: (0, ubc_llm_sandbox_config_1.getSandboxReasoningCapability)(model) });
+        if (chatTemplateKwargs) {
+            // An explicit caller-supplied chat_template_kwargs wins: they may be
+            // toggling template flags this mapping knows nothing about.
+            fields.chat_template_kwargs = {
+                ...chatTemplateKwargs,
+                ...rest.chat_template_kwargs,
+            };
+        }
+        return fields;
     }
     /**
      * Gets the unique identifier name for this provider.
@@ -149,7 +204,7 @@ class UbcLlmSandboxProvider {
             }
             const { known, rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
             const model = known.model || this.defaultModel;
-            const completionFields = (0, openai_compat_mapping_1.buildOpenAICompatCompletionFields)(model, known);
+            const completionFields = this.buildCompletionFields(model, known, rest);
             this.logger.debug('Sending conversation to UBC LLM Sandbox', { model, messageCount: messages.length, options });
             const response = await this.client.chat.completions.create({
                 ...rest,
@@ -218,7 +273,7 @@ class UbcLlmSandboxProvider {
             }
             const { known, rest } = (0, openai_compat_mapping_1.separateOpenAIOptions)(options);
             const model = known.model || this.defaultModel;
-            const completionFields = (0, openai_compat_mapping_1.buildOpenAICompatCompletionFields)(model, known);
+            const completionFields = this.buildCompletionFields(model, known, rest);
             this.logger.debug('Streaming conversation from UBC LLM Sandbox', { model, messageCount: messages.length, options });
             const stream = await this.client.chat.completions.create({
                 ...rest,
@@ -302,8 +357,19 @@ class UbcLlmSandboxProvider {
      * @throws {APIError} If the underlying API call fails.
      */
     async embed(texts, options) {
+        const configuredModel = options?.model || this.embeddingModel;
+        // Retained for backwards compatibility with earlier sandbox deployments,
+        // and to stay consistent with the Ollama provider's default. It is warned
+        // about rather than silently used: the fallback names a model that appears
+        // nowhere in the caller's config, so an unconfigured `embeddingModel`
+        // otherwise surfaces as a gateway error about a model they never chose.
+        const model = configuredModel || LEGACY_DEFAULT_EMBEDDING_MODEL;
+        if (!configuredModel) {
+            this.logger.warn(`No embedding model configured for the UBC LLM Sandbox provider; falling back to '${LEGACY_DEFAULT_EMBEDDING_MODEL}'. ` +
+                "Set 'embeddingModel' in the LLM config or pass 'model' in the embedding options " +
+                `(the current sandbox embedding model is '${ubc_llm_sandbox_config_1.UBC_LLM_SANDBOX_MODELS.embedding}').`);
+        }
         try {
-            const model = options?.model || this.embeddingModel || 'nomic-embed-text'; // Default to nomic
             this.logger.debug('Generating embeddings with UBC LLM Sandbox', {
                 model,
                 textCount: texts.length,

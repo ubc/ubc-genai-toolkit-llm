@@ -31,17 +31,34 @@ export declare class UbcLlmSandboxProvider implements Provider {
      * An optional embedding model can also be specified.
      *
      * @param {string} apiKey - The API key for accessing the UBC LLM Sandbox.
-     * @param {string} endpoint - The base URL of the UBC LLM Sandbox API endpoint. This is mandatory.
+     * @param {string} endpoint - The base URL of the UBC LLM Sandbox API endpoint. This is
+     *   mandatory. It is normalized via {@link normalizeSandboxEndpoint}, so the documented
+     *   request URL (`.../v1/chat/completions`) and the bare host both resolve to the API root.
      * @param {string} defaultModel - The identifier of the default LLM to use for chat completions if not specified in options.
      * @param {LoggerInterface} logger - An instance of a logger conforming to the LoggerInterface for logging messages.
      * @param {object} [options] - Optional configuration settings.
      * @param {string} [options.embeddingModel] - The identifier of the default model to use for embeddings if not specified in options.
      * @throws {APIError} If the endpoint URL is not provided.
+     * @throws {ConfigurationError} If the endpoint URL is not a valid absolute URL.
      */
     constructor(apiKey: string, endpoint: string, // Endpoint is mandatory for this provider
     defaultModel: string, logger: LoggerInterface, options?: {
         embeddingModel?: string;
     });
+    /**
+     * Builds the token / reasoning / temperature slice of a completion request
+     * under the sandbox's rules rather than OpenAI's.
+     *
+     * Three sandbox-specific adjustments happen here: self-hosted models are
+     * allowed to reason (OpenAI's mapping only recognizes `gpt-5`/o-series),
+     * efforts outside a model's native scale are clamped instead of being
+     * rejected by the gateway, and models that toggle thinking through their chat
+     * template rather than `reasoning_effort` get `chat_template_kwargs` instead.
+     *
+     * @see resolveSandboxReasoning
+     * @private
+     */
+    private buildCompletionFields;
     /**
      * Gets the unique identifier name for this provider.
      *

@@ -53,6 +53,17 @@ export interface OpenAICompatCompletionKnown {
     reasoningEffort?: ReasoningEffort | string;
     temperature?: number;
 }
+export interface OpenAICompatCompletionOptions {
+    /**
+     * Overrides whether reasoning may be sent for this model, for gateways whose
+     * roster is not OpenAI's. Only the reasoning gate moves — the token field
+     * name still follows {@link getOpenAIReasoningCapability}, because that is a
+     * property of the model's own API, not of who is proxying it.
+     *
+     * @see getSandboxReasoningCapability
+     */
+    reasoningCapability?: OpenAIReasoningCapability;
+}
 /**
  * Builds the token / reasoning / temperature slice for an OpenAI-compatible
  * chat completion request. Token field name follows model capability
@@ -62,7 +73,7 @@ export interface OpenAICompatCompletionKnown {
  * @throws {APIError} 400 for unsupported model+effort, invalid effort, or
  * required capability with no effort supplied.
  */
-export declare function buildOpenAICompatCompletionFields(model: string, known?: OpenAICompatCompletionKnown): {
+export declare function buildOpenAICompatCompletionFields(model: string, known?: OpenAICompatCompletionKnown, options?: OpenAICompatCompletionOptions): {
     temperature?: number;
     max_tokens?: number;
     max_completion_tokens?: number;
