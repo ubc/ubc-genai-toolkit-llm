@@ -2,6 +2,23 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-10
+
+### Added
+
+-   **Support for the 2026 UBC LLM Sandbox deployment** (`ai.apps.ctlt.ubc.ca` / `ai-stg.apps.ctlt.ubc.ca`). New exports `UBC_LLM_SANDBOX_ENDPOINTS` (`staging`, `production`) and `UBC_LLM_SANDBOX_MODELS` (`gpt-oss-120b`, `qwen3.6-35b-a3b`, `qwen3-embedding-0.6b`) so applications no longer hardcode URLs and model ids. The model roster is a convenience, not a validation allowlist — `getAvailableModels()` remains the source of truth.
+-   **Endpoint normalization** for the sandbox provider (`normalizeSandboxEndpoint`). A bare host, a trailing slash, or a full request URL pasted from the sandbox docs (`.../v1/chat/completions`) now all resolve to the API base instead of producing opaque 404s.
+
+### Fixed
+
+-   **`reasoningEffort` no longer fails on sandbox reasoning models.** The mapping layer previously recognized only `gpt-5`/o-series as reasoning-capable, so `gpt-oss-120b` was rejected with a client-side `400` before the request left the process. The reasoning gate is now separate from the token-field choice (`max_tokens` vs `max_completion_tokens`), and the sandbox resolves capability permissively for self-hosted models while keeping OpenAI's stricter rules for OpenAI models it proxies.
+-   **Reasoning efforts are clamped to the target model's scale** for the sandbox: `gpt-oss-120b` accepts only `low`/`medium`/`high` (verified against staging — the gateway returns `400 "... is not supported by Harmony"` for `none`, `minimal`, `xhigh` and `max`), so `none`/`minimal` clamp to `low` and `xhigh`/`max` clamp to `high` instead of erroring.
+-   **`reasoningEffort: 'none'` now actually disables thinking on Qwen3 models.** Qwen3 ignores `reasoning_effort` and toggles thinking through its chat template, so the request was previously a no-op and the model kept thinking. It now sends `chat_template_kwargs: { enable_thinking: false }` (a caller-supplied `chat_template_kwargs` still wins). This matters because Qwen3's chain of thought is billed against `max_tokens` before any visible content: on staging, a small JSON request cost ~1000 completion tokens with thinking on versus 39 with it off, and at `max_tokens: 512` returned `finish_reason: 'length'` with an empty string.
+
+### Changed
+
+-   **`embed()` on the sandbox provider now warns when it falls back to the default embedding model.** The `nomic-embed-text` fallback is unchanged and still works, so existing callers are unaffected; it simply logs a warning naming the current sandbox embedding model (`qwen3-embedding-0.6b`), because otherwise an unset `embeddingModel` surfaces as a gateway error about a model that appears nowhere in the caller's configuration. Setting `embeddingModel` explicitly silences it.
+
 ## [0.5.0] - 2026-08-04
 
 - Reasoning effort for some model providers

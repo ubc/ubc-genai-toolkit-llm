@@ -114,6 +114,18 @@ export interface OpenAICompatCompletionKnown {
 	temperature?: number;
 }
 
+export interface OpenAICompatCompletionOptions {
+	/**
+	 * Overrides whether reasoning may be sent for this model, for gateways whose
+	 * roster is not OpenAI's. Only the reasoning gate moves — the token field
+	 * name still follows {@link getOpenAIReasoningCapability}, because that is a
+	 * property of the model's own API, not of who is proxying it.
+	 *
+	 * @see getSandboxReasoningCapability
+	 */
+	reasoningCapability?: OpenAIReasoningCapability;
+}
+
 /**
  * Builds the token / reasoning / temperature slice for an OpenAI-compatible
  * chat completion request. Token field name follows model capability
@@ -125,14 +137,18 @@ export interface OpenAICompatCompletionKnown {
  */
 export function buildOpenAICompatCompletionFields(
 	model: string,
-	known: OpenAICompatCompletionKnown = {}
+	known: OpenAICompatCompletionKnown = {},
+	options: OpenAICompatCompletionOptions = {}
 ): {
 	temperature?: number;
 	max_tokens?: number;
 	max_completion_tokens?: number;
 	reasoning_effort?: string;
 } {
-	const capability = getOpenAIReasoningCapability(model);
+	// The model's own API decides which token field it understands...
+	const tokenCapability = getOpenAIReasoningCapability(model);
+	// ...while the caller may widen who is allowed to reason (see options).
+	const capability = options.reasoningCapability ?? tokenCapability;
 	const fields: {
 		temperature?: number;
 		max_tokens?: number;
@@ -145,7 +161,7 @@ export function buildOpenAICompatCompletionFields(
 	}
 
 	if (known.maxTokens !== undefined) {
-		if (capability === 'optional' || capability === 'required') {
+		if (tokenCapability === 'optional' || tokenCapability === 'required') {
 			fields.max_completion_tokens = known.maxTokens;
 		} else {
 			fields.max_tokens = known.maxTokens;
