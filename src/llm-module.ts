@@ -21,6 +21,7 @@ import { OpenAIProvider } from './providers/openai-provider';
 import { OllamaProvider } from './providers/ollama-provider';
 import { AnthropicProvider } from './providers/anthropic-provider';
 import { UbcLlmSandboxProvider } from './providers/ubc-llm-sandbox-provider';
+import { UbcLlmProxyProvider } from './providers/ubc-llm-proxy-provider';
 import { ConversationImpl } from './conversation';
 import { Conversation, ConversationFactory } from './conversation-interface';
 import type { ZodType } from 'zod';
@@ -286,6 +287,26 @@ export class LLMModule implements ConversationFactory {
 					logger,
 					{ embeddingModel }
 				);
+
+			case 'ubc-llm-proxy':
+				if (!apiKey) {
+					throw new ConfigurationError(
+						'apiKey is required for UBC LLM Proxy provider'
+					);
+				}
+				if (!endpoint) {
+					throw new ConfigurationError(
+						'endpoint is required for UBC LLM Proxy provider'
+					);
+				}
+				// No defaultModel check: the proxy's roster depends on the API key,
+				// so it is constructible without a model in order to call
+				// getAvailableModels() during setup. Chat and embedding calls made
+				// without one fail with a ConfigurationError naming what to set.
+				return new UbcLlmProxyProvider(apiKey, endpoint, logger, {
+					defaultModel,
+					embeddingModel,
+				});
 
 			default:
 				// Consider if we want a way to register custom providers?

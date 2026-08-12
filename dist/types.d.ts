@@ -2,8 +2,12 @@ import { ModuleConfig } from 'ubc-genai-toolkit-core';
 import type { ZodType } from 'zod';
 /**
  * LLM provider types
+ *
+ * The two UBC gateways front the same OpenAI-compatible LiteLLM service but
+ * apply different model policy: `ubc-llm-sandbox` serves only the approved B300
+ * models, while `ubc-llm-proxy` serves whatever the API key is entitled to.
  */
-export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'ubc-llm-sandbox';
+export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'ubc-llm-sandbox' | 'ubc-llm-proxy';
 /**
  * LLM configuration
  */
@@ -13,19 +17,30 @@ export interface LLMConfig extends ModuleConfig {
      */
     provider: ProviderType;
     /**
-     * API key for authentication (required for OpenAI and Anthropic)
+     * API key for authentication (required for OpenAI, Anthropic, UBC LLM
+     * Sandbox, and UBC LLM Proxy)
      */
     apiKey?: string;
     /**
-     * API endpoint (required for Ollama, optional for others)
+     * API endpoint (required for Ollama, UBC LLM Sandbox, and UBC LLM Proxy;
+     * optional for others)
      */
     endpoint?: string;
     /**
-     * Default model to use for chat completion
+     * Default model to use for chat completion.
+     *
+     * Required by every provider except `ubc-llm-proxy`, whose model roster
+     * depends on the API key: it can be constructed without one so
+     * {@link LLMModule.getAvailableModels} can be queried during setup, and then
+     * fails with a `ConfigurationError` on any chat call that does not name a
+     * model in {@link LLMOptions.model}.
      */
-    defaultModel: string;
+    defaultModel?: string;
     /**
-     * Default model to use for embeddings (optional)
+     * Default model to use for embeddings (optional).
+     *
+     * Required before calling `embed()` on the UBC gateways, which do not
+     * substitute a fallback embedding model.
      */
     embeddingModel?: string;
     /**

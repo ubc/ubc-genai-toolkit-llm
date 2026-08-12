@@ -22,9 +22,9 @@
  *
  * | Variable | Required? | Purpose |
  * |----------|-----------|---------|
- * | `LLM_PROVIDER` | No (default `openai`) | `openai` \| `anthropic` \| `ollama` \| `ubc-llm-sandbox` |
- * | `LLM_API_KEY` | Yes for OpenAI, Anthropic, sandbox | Secret token for the API |
- * | `LLM_ENDPOINT` | Yes for `ollama`, sandbox | Base URL (e.g. `http://127.0.0.1:11434` for Ollama) |
+ * | `LLM_PROVIDER` | No (default `openai`) | `openai` \| `anthropic` \| `ollama` \| `ubc-llm-sandbox` \| `ubc-llm-proxy` |
+ * | `LLM_API_KEY` | Yes for OpenAI, Anthropic, sandbox, proxy | Secret token for the API |
+ * | `LLM_ENDPOINT` | Yes for `ollama`, sandbox, proxy | Base URL (e.g. `http://127.0.0.1:11434` for Ollama) |
  * | `LLM_DEFAULT_MODEL` | Strongly recommended | Model id (e.g. `gpt-4o`, `claude-sonnet-4-5-20250929`) |
  * | `LLM_EMBEDDING_MODEL` | Yes if you call `embed()` | Embedding model id |
  * | `DEBUG` | No | Set to `true` for more verbose toolkit logging |
@@ -39,6 +39,21 @@
  * LLM_ENDPOINT=https://ai-stg.apps.ctlt.ubc.ca/v1   # production: https://ai.apps.ctlt.ubc.ca/v1
  * LLM_DEFAULT_MODEL=qwen3.6-35b-a3b                 # or gpt-oss-120b for reasoning
  * LLM_EMBEDDING_MODEL=qwen3-embedding-0.6b
+ * ```
+ *
+ * Only the approved models above are reachable through `ubc-llm-sandbox`.
+ *
+ * ## UBC LLM Proxy
+ *
+ * Same API, no allowlist — the key decides which models you get, and there are
+ * no defaults, so run `list-models` first and use an id from that list.
+ *
+ * ```
+ * LLM_PROVIDER=ubc-llm-proxy
+ * LLM_API_KEY=<your proxy key>
+ * LLM_ENDPOINT=<the endpoint issued with your key>
+ * LLM_DEFAULT_MODEL=<an id from getAvailableModels()>
+ * LLM_EMBEDDING_MODEL=<an embedding id from getAvailableModels()>
  * ```
  */
 
@@ -66,7 +81,8 @@ export function loadConfig(): Partial<LLMConfig> {
 		| 'openai'
 		| 'anthropic'
 		| 'ollama'
-		| 'ubc-llm-sandbox';
+		| 'ubc-llm-sandbox'
+		| 'ubc-llm-proxy';
 
 	// Get the API key from environment variables. Required for providers like OpenAI.
 	const apiKey = process.env.LLM_API_KEY;
@@ -77,8 +93,8 @@ export function loadConfig(): Partial<LLMConfig> {
 	// Get the default model name. Specific default depends on provider if not set.
 	const defaultModel = process.env.LLM_DEFAULT_MODEL;
 
-	// Model used by `embed()`. Providers fall back to 'nomic-embed-text' when this
-	// is unset, which is rarely what you want — set it explicitly.
+	// Model used by `embed()`. The UBC gateways have no fallback embedding model,
+	// so `embed()` fails with a ConfigurationError unless this is set.
 	const embeddingModel = process.env.LLM_EMBEDDING_MODEL;
 
 	// Create a simple console logger instance.

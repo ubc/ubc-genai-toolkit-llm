@@ -6,6 +6,7 @@ const openai_provider_1 = require("./providers/openai-provider");
 const ollama_provider_1 = require("./providers/ollama-provider");
 const anthropic_provider_1 = require("./providers/anthropic-provider");
 const ubc_llm_sandbox_provider_1 = require("./providers/ubc-llm-sandbox-provider");
+const ubc_llm_proxy_provider_1 = require("./providers/ubc-llm-proxy-provider");
 const conversation_1 = require("./conversation");
 /**
  * Default LLM configuration
@@ -184,6 +185,21 @@ class LLMModule {
                     throw new ubc_genai_toolkit_core_1.ConfigurationError('defaultModel is required for UBC LLM Sandbox provider');
                 }
                 return new ubc_llm_sandbox_provider_1.UbcLlmSandboxProvider(apiKey, endpoint, defaultModel, logger, { embeddingModel });
+            case 'ubc-llm-proxy':
+                if (!apiKey) {
+                    throw new ubc_genai_toolkit_core_1.ConfigurationError('apiKey is required for UBC LLM Proxy provider');
+                }
+                if (!endpoint) {
+                    throw new ubc_genai_toolkit_core_1.ConfigurationError('endpoint is required for UBC LLM Proxy provider');
+                }
+                // No defaultModel check: the proxy's roster depends on the API key,
+                // so it is constructible without a model in order to call
+                // getAvailableModels() during setup. Chat and embedding calls made
+                // without one fail with a ConfigurationError naming what to set.
+                return new ubc_llm_proxy_provider_1.UbcLlmProxyProvider(apiKey, endpoint, logger, {
+                    defaultModel,
+                    embeddingModel,
+                });
             default:
                 // Consider if we want a way to register custom providers?
                 // For now, treat unknown provider string as an error.

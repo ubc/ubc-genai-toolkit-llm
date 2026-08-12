@@ -2,6 +2,25 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-12
+
+### Added
+
+-   **New `ubc-llm-proxy` provider.** Talks to UBC's LiteLLM gateway with no model allowlist: whatever the API key is entitled to, the provider will send. It requires `apiKey` and `endpoint` and has **no default chat or embedding model** — deliberately, since the roster depends on the key. It can therefore be constructed with only a key and an endpoint so `getAvailableModels()` can be queried during setup, and a chat or embedding call made without a model (configured or per-request) fails with a `ConfigurationError` naming the setting to set rather than substituting one. Uses the OpenAI-compatible LiteLLM routes (`/models`, `/chat/completions`, `/embeddings`), and reports model ids **exactly** as the gateway returns them — namespaced route names (`openai/gpt-4o`), vendor prefixes, versions and colons are all passed through byte for byte, with no suffix added or removed. A model the key cannot reach is not pre-empted locally: the gateway's own `404` surfaces as an `APIError`.
+-   **`UBC_LLM_SANDBOX_APPROVED_MODELS`**, the single exported constant holding the approved B300 ids, plus `isApprovedSandboxModel()`, `filterApprovedSandboxModels()`, `assertApprovedSandboxModel()`, and `describeApprovedSandboxModels()`. `UBC_LLM_SANDBOX_MODELS` is unchanged and now type-checked against that list.
+-   **`normalizeProxyEndpoint()`**, the proxy's counterpart to `normalizeSandboxEndpoint()`.
+
+### Changed
+
+-   **`ubc-llm-sandbox` is now restricted to the approved B300 models.** `getAvailableModels()` reports only approved ids (the gateway's own ordering and spelling preserved), and any other id is rejected with a `ConfigurationError` before a request is sent — whether it arrives as the configured `defaultModel`, the configured `embeddingModel`, or a per-request `model` override, and whether or not the underlying API key can reach it. Matching is exact: `GPT-OSS-120B`, `qwen3.6-35b-a3b:latest` and `openai/gpt-oss-120b` are rejected rather than repaired. Applications that need a model outside the list should use the new `ubc-llm-proxy` provider — same endpoint and key, no allowlist.
+-   **The OpenAI-compatible/LiteLLM transport is now shared** between the two gateway providers (`LiteLLMGatewayProvider`, `litellm-gateway-config`). Only model policy differs between them. The sandbox's exported helpers (`normalizeSandboxEndpoint`, `getSandboxReasoningCapability`, `coerceSandboxReasoningEffort`, `resolveSandboxReasoning`, `SandboxReasoningRequest`) keep their names, signatures, and behavior, and now delegate to the shared implementation.
+-   **`LLMConfig.defaultModel` is now optional** so `ubc-llm-proxy` can be configured for model discovery before a model is chosen. Every other provider still requires it and raises the same `ConfigurationError` when it is missing. Existing configurations are unaffected.
+-   Errors raised by the gateway providers preserve the HTTP status and the gateway's own error `code`, so authentication (`401`) and quota / rate-limit (`429`) failures remain identifiable after normalization on the chat, streaming, embedding, and `/models` paths.
+
+### Removed
+
+-   **The `nomic-embed-text` fallback in the sandbox provider's `embed()`.** It named a model that is not on the current deployment (and is not approved), so it produced a gateway error about a model that appeared nowhere in the caller's configuration; 0.6.0 already warned about it on every call. `embed()` now fails immediately with a `ConfigurationError` naming `embeddingModel` and the approved embedding model (`qwen3-embedding-0.6b`). **Breaking** for callers that relied on the fallback — set `embeddingModel` in the LLM config or pass `model` in the embedding options.
+
 ## [0.6.0] - 2026-08-10
 
 ### Added
