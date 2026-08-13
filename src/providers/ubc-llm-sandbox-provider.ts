@@ -1,15 +1,19 @@
 /**
  * @fileoverview Implements the Provider interface for the UBC LLM Sandbox service.
  *
- * The UBC LLM Sandbox provides access to various large language models hosted
- * within UBC's infrastructure. This provider acts as a facade, interacting
- * with the underlying service (which uses a LiteLLM proxy compatible with the
- * OpenAI API) to offer a standardized way for applications to use these models
- * for chat completions and embeddings.
+ * The UBC LLM Sandbox provides access to a **curated** set of large language
+ * models hosted within UBC's infrastructure. This provider acts as a facade,
+ * interacting with the underlying service (which uses a LiteLLM proxy compatible
+ * with the OpenAI API) to offer a standardized way for applications to use these
+ * models for chat completions and embeddings.
  *
  * Key Features:
  * - Connects to a specified UBC LLM Sandbox endpoint.
  * - Uses an API key for authentication.
+ * - **Restricted to the approved B300 models** ({@link UBC_LLM_SANDBOX_APPROVED_MODELS}):
+ *   `/models` reports only those, and any other id is rejected before a request
+ *   is sent, even when the API key could reach it. Applications that need the
+ *   full entitlement of their key should use the `ubc-llm-proxy` provider.
  * - Supports standard chat completion (`sendMessage`, `sendConversation`).
  * - Supports streaming chat completion (`streamConversation`).
  * - Supports tool calling and multi-modal (image) messages.
@@ -23,50 +27,28 @@
  * `ai-stg.apps.ctlt.ubc.ca` (staging) — see {@link UBC_LLM_SANDBOX_ENDPOINTS}
  * and {@link UBC_LLM_SANDBOX_MODELS} for the current URLs and model roster.
  *
+ * The OpenAI-compatible transport itself is shared with the proxy provider; see
+ * {@link LiteLLMGatewayProvider}.
+ *
  * @see {Provider} Interface definition for LLM providers.
  * @see {@link https://developer.ubc.ca/sandbox/llm} For more information about the UBC LLM Sandbox.
  */
-import OpenAI from 'openai';
-import { Provider } from './provider-interface';
+import { APIError } from 'ubc-genai-toolkit-core';
+import type { LoggerInterface } from 'ubc-genai-toolkit-core';
 import {
-	LLMOptions,
-	LLMResponse,
-	LLMStructuredResponse,
-	Message,
-	StructuredOutputOptions,
-	EmbeddingOptions,
-	EmbeddingResponse,
-} from '../types';
-import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
-import type { ZodType } from 'zod';
+	LiteLLMGatewayProvider,
+	ModelPurpose,
+} from './litellm-gateway-provider';
 import {
-	separateOpenAIOptions,
-	buildOpenAICompatCompletionFields,
-	OpenAICompatCompletionKnown,
-	toOpenAIContent,
-	toOpenAIMessages,
-	toOpenAITools,
-	fromOpenAIToolCalls,
-	mapOpenAIFinishReason,
-} from './openai-compat-mapping';
-import {
-	resolveSandboxReasoning,
-	getSandboxReasoningCapability,
+	assertApprovedSandboxModel,
+	describeApprovedSandboxModels,
+	filterApprovedSandboxModels,
 	normalizeSandboxEndpoint,
 	UBC_LLM_SANDBOX_MODELS,
 } from './ubc-llm-sandbox-config';
 
 /**
- * Embedding model used when none is configured.
- *
- * Kept from earlier sandbox deployments so existing callers are not broken; new
- * code should set `embeddingModel` explicitly (see
- * {@link UBC_LLM_SANDBOX_MODELS}).
- */
-const LEGACY_DEFAULT_EMBEDDING_MODEL = 'nomic-embed-text';
-
-/**
- * Provides access to Large Language Models (LLMs) via the UBC LLM Sandbox service.
+ * Provides access to the approved UBC LLM Sandbox models.
  *
  * This class implements the `Provider` interface, offering methods to interact
  * with LLMs for tasks like generating text responses (chat completions) and
@@ -79,13 +61,7 @@ const LEGACY_DEFAULT_EMBEDDING_MODEL = 'nomic-embed-text';
  *
  * @implements {Provider}
  */
-export class UbcLlmSandboxProvider implements Provider {
-	private client: OpenAI;
-	private logger: LoggerInterface;
-	private defaultModel: string;
-	private embeddingModel?: string;
-	private endpoint: string; // Keep endpoint for logging/reference
-
+export class UbcLlmSandboxProvider extends LiteLLMGatewayProvider {
 	/**
 	 * Initializes a new instance of the UbcLlmSandboxProvider.
 	 *
@@ -93,6 +69,10 @@ export class UbcLlmSandboxProvider implements Provider {
 	 * Requires an API key for authentication and an endpoint URL. A default model must
 	 * be specified for chat completions when no model is provided in the options.
 	 * An optional embedding model can also be specified.
+	 *
+	 * The default model is *not* validated here: an application configured for a
+	 * model the sandbox no longer approves should still be able to start up and
+	 * call `getAvailableModels()`. The check happens when a request is made.
 	 *
 	 * @param {string} apiKey - The API key for accessing the UBC LLM Sandbox.
 	 * @param {string} endpoint - The base URL of the UBC LLM Sandbox API endpoint. This is
@@ -118,474 +98,50 @@ export class UbcLlmSandboxProvider implements Provider {
 				400
 			);
 		}
-		// Accept the endpoint spellings people actually paste from the sandbox docs.
-		const baseURL = normalizeSandboxEndpoint(endpoint);
-		this.client = new OpenAI({
+		super({
+			providerName: 'ubc-llm-sandbox',
+			displayName: 'UBC LLM Sandbox',
 			apiKey,
-			baseURL,
-		});
-		this.endpoint = baseURL;
-		this.defaultModel = defaultModel;
-		this.embeddingModel = options?.embeddingModel;
-		this.logger = logger;
-		this.logger.debug('UbcLlmSandboxProvider initialized', {
-			endpoint: baseURL,
-			configuredEndpoint: endpoint,
+			// Accept the endpoint spellings people actually paste from the sandbox docs.
+			baseURL: normalizeSandboxEndpoint(endpoint),
+			logger,
 			defaultModel,
-			embeddingModel: this.embeddingModel,
+			embeddingModel: options?.embeddingModel,
 		});
 	}
 
 	/**
-	 * Builds the token / reasoning / temperature slice of a completion request
-	 * under the sandbox's rules rather than OpenAI's.
+	 * Reports only the approved models, in the order the gateway returned them.
 	 *
-	 * Three sandbox-specific adjustments happen here: self-hosted models are
-	 * allowed to reason (OpenAI's mapping only recognizes `gpt-5`/o-series),
-	 * efforts outside a model's native scale are clamped instead of being
-	 * rejected by the gateway, and models that toggle thinking through their chat
-	 * template rather than `reasoning_effort` get `chat_template_kwargs` instead.
-	 *
-	 * @see resolveSandboxReasoning
-	 * @private
+	 * A key with broader entitlements will see extra models in a raw
+	 * `GET /v1/models`; they are deliberately hidden here so that everything this
+	 * provider advertises is also something it will accept on a request.
 	 */
-	private buildCompletionFields(
+	protected override filterAvailableModels(ids: string[]): string[] {
+		return filterApprovedSandboxModels(ids);
+	}
+
+	/**
+	 * Enforces the approved-model allowlist for chat and embeddings alike,
+	 * covering both the configured default and a per-request `model` override.
+	 *
+	 * @throws {ConfigurationError} When the model is not approved.
+	 */
+	protected override validateModel(
 		model: string,
-		known: OpenAICompatCompletionKnown,
-		rest: Record<string, any>
-	) {
-		const { reasoningEffort, chatTemplateKwargs } = resolveSandboxReasoning(
-			model,
-			known.reasoningEffort
-		);
-		if (reasoningEffort !== known.reasoningEffort) {
-			this.logger.debug('Adjusted reasoning request for UBC LLM Sandbox model', {
-				model,
-				requested: known.reasoningEffort,
-				sentEffort: reasoningEffort,
-				chatTemplateKwargs,
-			});
-		}
-
-		const fields: Record<string, any> = buildOpenAICompatCompletionFields(
-			model,
-			{ ...known, reasoningEffort },
-			{ reasoningCapability: getSandboxReasoningCapability(model) }
-		);
-
-		if (chatTemplateKwargs) {
-			// An explicit caller-supplied chat_template_kwargs wins: they may be
-			// toggling template flags this mapping knows nothing about.
-			fields.chat_template_kwargs = {
-				...chatTemplateKwargs,
-				...(rest.chat_template_kwargs as Record<string, unknown> | undefined),
-			};
-		}
-
-		return fields;
+		purpose: ModelPurpose
+	): string {
+		return assertApprovedSandboxModel(model, purpose);
 	}
 
-	/**
-	 * Gets the unique identifier name for this provider.
-	 *
-	 * @returns {string} The name 'ubc-llm-sandbox'.
-	 */
-	getName(): string {
-		return 'ubc-llm-sandbox';
-	}
-
-	/**
-	 * Retrieves a list of model identifiers available through the configured UBC LLM Sandbox endpoint.
-	 *
-	 * This method queries the sandbox's `/models` endpoint (via the OpenAI client)
-	 * to fetch the list of currently accessible models.
-	 *
-	 * @returns {Promise<string[]>} A promise that resolves with an array of available model ID strings.
-	 * @throws {APIError} If there's an error communicating with the sandbox API or parsing the response.
-	 */
-	async getAvailableModels(): Promise<string[]> {
-		try {
-			this.logger.debug('Fetching available UBC LLM Sandbox models', { endpoint: this.endpoint });
-			const models = await this.client.models.list();
-			return models.data.map((model) => model.id);
-		} catch (error) {
-			this.logger.error('Error fetching UBC LLM Sandbox models', { error });
-			throw this.handleError(error);
-		}
-	}
-
-	/**
-	 * Sends a single user message to the LLM and retrieves the response.
-	 *
-	 * This is a convenience method that wraps `sendConversation`. It constructs
-	 * a simple conversation history containing only the user's message (and an optional
-	 * system prompt) and sends it to the LLM.
-	 *
-	 * @param {string} message - The user's message content.
-	 * @param {LLMOptions} [options] - Optional parameters for the LLM call (e.g., model, temperature, system prompt).
-	 * @returns {Promise<LLMResponse>} A promise that resolves with the LLM's response, normalized to the toolkit's format.
-	 * @throws {APIError} If the underlying API call fails.
-	 */
-	async sendMessage(
-		message: string,
-		options?: LLMOptions
-	): Promise<LLMResponse> {
-		const messages: Message[] = [{ role: 'user', content: message }];
-
-		if (options?.systemPrompt) {
-			messages.unshift({ role: 'system', content: options.systemPrompt });
-		}
-
-		this.logger.debug('Sending single message via sendConversation (UBC LLM Sandbox)');
-		return this.sendConversation(messages, options);
-	}
-
-	/**
-	 * Sends a multi-turn conversation history to the LLM and retrieves the response.
-	 *
-	 * This method allows for sending a structured conversation (including system, user,
-	 * and assistant messages) to the LLM. It handles mapping the toolkit's `Message`
-	 * format to the OpenAI-compatible format expected by the sandbox endpoint.
-	 *
-	 * @param {Message[]} messages - An array of message objects representing the conversation history.
-	 * @param {LLMOptions} [options] - Optional parameters for the LLM call (e.g., model, temperature, maxTokens, responseFormat, system prompt).
-	 * @returns {Promise<LLMResponse>} A promise that resolves with the LLM's response, normalized to the toolkit's format.
-	 * @throws {APIError} If the underlying API call fails.
-	 */
-	async sendConversation(
-		messages: Message[],
-		options?: LLMOptions
-	): Promise<LLMResponse> {
-		try {
-			// System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
-			const openaiMessages = toOpenAIMessages(messages);
-
-			// Handle system prompt if not already in messages
-			if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
-				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
-			}
-
-			const { known, rest } = separateOpenAIOptions(options);
-			const model = known.model || this.defaultModel;
-			const completionFields = this.buildCompletionFields(model, known, rest);
-			this.logger.debug('Sending conversation to UBC LLM Sandbox', { model, messageCount: messages.length, options });
-
-			const response = await this.client.chat.completions.create({
-				...rest,
-				...completionFields,
-				model,
-				messages: openaiMessages,
-				// Only set response_format when canonical responseFormat was provided so raw
-				// snake_case passthrough (e.g. BiocBot) in `rest` is not overwritten by undefined.
-				...(known.responseFormat !== undefined
-					? {
-							response_format:
-								known.responseFormat === 'json'
-									? { type: 'json_object' }
-									: undefined,
-						}
-					: {}),
-				// Tool calling: translate toolkit definitions into OpenAI function tools.
-				tools:
-					known.tools && known.tools.length > 0
-						? toOpenAITools(known.tools)
-						: undefined,
-				...(known.toolChoice !== undefined
-					? { tool_choice: known.toolChoice }
-					: {}),
-				stream: false,
-			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
-
-			return this.normalizeResponse(response);
-		} catch (error) {
-			this.logger.error('Error calling UBC LLM Sandbox API', { error });
-			throw this.handleError(error);
-		}
-	}
-
-	/**
-	 * Sends a structured conversation to the LLM and retrieves the response.
-	 *
-	 * This method is not supported by the UBC LLM Sandbox provider in this version.
-	 * @param messages - The messages to send to the UBC LLM Sandbox API
-	 * @param schema - The schema to use for the structured output
-	 * @param options - The options for the UBC LLM Sandbox API
-	 * @returns The response from the UBC LLM Sandbox API
-	 */
-	async sendStructuredConversation<T>(
-		_messages: Message[],
-		_schema: ZodType<T>,
-		_options?: StructuredOutputOptions
-	): Promise<LLMStructuredResponse<T>> {
-		throw new APIError(
-			'Structured Zod output is not supported by the UBC LLM Sandbox provider in this version.',
-			501,
-			{ provider: 'ubc-llm-sandbox' }
-		);
-	}
-
-	/**
-	 * Sends a conversation history to the LLM and streams the response back chunk by chunk.
-	 *
-	 * Useful for providing real-time feedback to the user as the LLM generates its response.
-	 * It invokes the provided callback function for each piece of text received from the stream.
-	 * The final resolved promise contains the complete concatenated response and metadata,
-	 * although usage statistics might be incomplete due to limitations in the streaming API
-	 * provided by the underlying LiteLLM proxy.
-	 *
-	 * @param {Message[]} messages - An array of message objects representing the conversation history.
-	 * @param {(chunk: string) => void} callback - A function that will be called with each chunk of text received from the stream.
-	 * @param {LLMOptions} [options] - Optional parameters for the LLM call (e.g., model, temperature, maxTokens, system prompt).
-	 * @returns {Promise<LLMResponse>} A promise that resolves with the final aggregated response object once the stream is complete. Usage data may be incomplete.
-	 * @throws {APIError} If the underlying API call fails or an error occurs during streaming.
-	 */
-	async streamConversation(
-		messages: Message[],
-		callback: (chunk: string) => void,
-		options?: LLMOptions
-	): Promise<LLMResponse> {
-		try {
-			// System filtering + tool_call / tool_result mapping live in openai-compat-mapping.
-			const openaiMessages = toOpenAIMessages(messages);
-
-			// Handle system prompt if not already in messages
-			if (options?.systemPrompt && !messages.some(m => m.role === 'system')) {
-				openaiMessages.unshift({ role: 'system', content: options.systemPrompt });
-			}
-
-			const { known, rest } = separateOpenAIOptions(options);
-			const model = known.model || this.defaultModel;
-			const completionFields = this.buildCompletionFields(model, known, rest);
-			this.logger.debug('Streaming conversation from UBC LLM Sandbox', { model, messageCount: messages.length, options });
-
-			const stream = await this.client.chat.completions.create({
-				...rest,
-				...completionFields,
-				model,
-				messages: openaiMessages,
-				// Tool calling: translate toolkit definitions into OpenAI function tools.
-				tools:
-					known.tools && known.tools.length > 0
-						? toOpenAITools(known.tools)
-						: undefined,
-				tool_choice: known.toolChoice,
-				stream: true,
-			} as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming);
-
-			let fullContent = '';
-			// Tool-call deltas arrive fragmented across chunks, keyed by index;
-			// accumulate here and surface complete calls only on the final response.
-			const toolCallAcc: Array<{ id?: string; name?: string; args: string }> = [];
-			let finishReason: string | null | undefined;
-
-			for await (const chunk of stream) {
-				const choice = chunk.choices[0];
-				const content = choice?.delta?.content || '';
-				if (content) {
-					fullContent += content;
-					callback(content);
-				}
-				if (choice?.delta?.tool_calls) {
-					for (const deltaCall of choice.delta.tool_calls) {
-						const i = deltaCall.index;
-						toolCallAcc[i] ??= { args: '' };
-						if (deltaCall.id) toolCallAcc[i].id = deltaCall.id;
-						if (deltaCall.function?.name) {
-							toolCallAcc[i].name = (toolCallAcc[i].name ?? '') + deltaCall.function.name;
-						}
-						if (deltaCall.function?.arguments) {
-							toolCallAcc[i].args += deltaCall.function.arguments;
-						}
-					}
-				}
-				if (choice?.finish_reason) {
-					finishReason = choice.finish_reason;
-				}
-			}
-
-			const toolCalls =
-				toolCallAcc.length > 0
-					? fromOpenAIToolCalls({
-						tool_calls: toolCallAcc.map((acc, i) => ({
-							id: acc.id ?? `call_${i}`,
-							type: 'function',
-							function: { name: acc.name ?? '', arguments: acc.args || '{}' },
-						})),
-					})
-					: undefined;
-
-			return {
-				content: fullContent,
-				toolCalls,
-				stopReason: mapOpenAIFinishReason(finishReason),
-				model: model, // Use the requested model name
-				usage: {
-					promptTokens: undefined,
-					completionTokens: undefined,
-					totalTokens: undefined,
-				},
-				metadata: { provider: 'ubc-llm-sandbox' },
-			};
-		} catch (error) {
-			this.logger.error('Error streaming from UBC LLM Sandbox API', { error });
-			throw this.handleError(error);
-		}
-	}
-
-	/**
-	 * Generates embeddings for a list of text inputs using a specified or default embedding model.
-	 *
-	 * Embeddings are numerical vector representations of text, useful for tasks like
-	 * semantic search, clustering, and similarity comparisons. This method sends the
-	 * input texts to the sandbox's embedding endpoint.
-	 *
-	 * @param {string[]} texts - An array of strings for which to generate embeddings.
-	 * @param {EmbeddingOptions} [options] - Optional parameters for the embedding call (e.g., model, dimensions).
-	 * @returns {Promise<EmbeddingResponse>} A promise that resolves with the generated embeddings and metadata, normalized to the toolkit's format.
-	 * @throws {APIError} If the underlying API call fails.
-	 */
-	async embed(
-		texts: string[],
-		options?: EmbeddingOptions
-	): Promise<EmbeddingResponse> {
-		const configuredModel = options?.model || this.embeddingModel;
-		// Retained for backwards compatibility with earlier sandbox deployments,
-		// and to stay consistent with the Ollama provider's default. It is warned
-		// about rather than silently used: the fallback names a model that appears
-		// nowhere in the caller's config, so an unconfigured `embeddingModel`
-		// otherwise surfaces as a gateway error about a model they never chose.
-		const model = configuredModel || LEGACY_DEFAULT_EMBEDDING_MODEL;
-		if (!configuredModel) {
-			this.logger.warn(
-				`No embedding model configured for the UBC LLM Sandbox provider; falling back to '${LEGACY_DEFAULT_EMBEDDING_MODEL}'. ` +
-					"Set 'embeddingModel' in the LLM config or pass 'model' in the embedding options " +
-					`(the current sandbox embedding model is '${UBC_LLM_SANDBOX_MODELS.embedding}').`
+	/** Names the approved ids rather than pointing at `getAvailableModels()`. */
+	protected override modelGuidance(purpose: ModelPurpose): string {
+		if (purpose === 'embedding') {
+			return (
+				`The approved embedding model is '${UBC_LLM_SANDBOX_MODELS.embedding}'. ` +
+				describeApprovedSandboxModels()
 			);
 		}
-
-		try {
-			this.logger.debug('Generating embeddings with UBC LLM Sandbox', {
-				model,
-				textCount: texts.length,
-				options,
-			});
-
-			// Extract provider-specific options (like dimensions)
-			const { truncate, ...providerOptions } = options || {}; // truncate might not be used but keep pattern
-			delete providerOptions.model; // Don't pass our internal model option directly
-
-			// Use a raw post request to bypass the default 'encoding_format'
-			// parameter that client.embeddings.create() automatically adds.
-			const response = await this.client.post('/embeddings', {
-				body: {
-					model: model,
-					input: texts,
-					...providerOptions,
-				},
-				// We need to cast the response to the expected type for the rest of
-				// the function to work correctly.
-			}) as OpenAI.Embeddings.CreateEmbeddingResponse;
-
-			return this.normalizeEmbeddingResponse(response);
-		} catch (error) {
-			this.logger.error('Error calling UBC LLM Sandbox Embeddings API', {
-				error,
-			});
-			throw this.handleError(error);
-		}
-	}
-
-	/**
-	 * Normalizes the response from an OpenAI-compatible chat completion API call
-	 * into the toolkit's standard `LLMResponse` format.
-	 *
-	 * This ensures consistency across different providers. It extracts the main content,
-	 * model identifier, usage statistics, and adds provider-specific metadata.
-	 *
-	 * @param {OpenAI.Chat.Completions.ChatCompletion} response - The raw response object from the OpenAI client.
-	 * @returns {LLMResponse} The normalized response object.
-	 * @private
-	 */
-	private normalizeResponse(
-		response: OpenAI.Chat.Completions.ChatCompletion
-	): LLMResponse {
-		const choice = response.choices[0];
-		return {
-			content: choice?.message?.content || '',
-			toolCalls: fromOpenAIToolCalls(choice?.message),
-			stopReason: mapOpenAIFinishReason(choice?.finish_reason),
-			model: response.model,
-			usage: {
-				promptTokens: response.usage?.prompt_tokens,
-				completionTokens: response.usage?.completion_tokens,
-				totalTokens: response.usage?.total_tokens,
-			},
-			metadata: {
-				provider: 'ubc-llm-sandbox',
-				// Include relevant OpenAI-compatible fields if needed
-				id: response.id,
-				created: response.created,
-			},
-		};
-	}
-
-	/**
-	 * Normalizes the response from an OpenAI-compatible embeddings API call
-	 * into the toolkit's standard `EmbeddingResponse` format.
-	 *
-	 * Extracts the embedding vectors, model identifier, and usage statistics,
-	 * presenting them in a consistent structure.
-	 *
-	 * @param {OpenAI.Embeddings.CreateEmbeddingResponse} response - The raw response object from the OpenAI client's embedding creation method.
-	 * @returns {EmbeddingResponse} The normalized embedding response object.
-	 * @private
-	 */
-	private normalizeEmbeddingResponse(
-		response: OpenAI.Embeddings.CreateEmbeddingResponse
-	): EmbeddingResponse {
-		return {
-			embeddings: response.data.map((item) => item.embedding),
-			model: response.model,
-			usage: {
-				promptTokens: response.usage?.prompt_tokens,
-				totalTokens: response.usage?.total_tokens,
-			},
-			metadata: {
-				provider: 'ubc-llm-sandbox',
-			},
-		};
-	}
-
-	/**
-	 * Handles errors that occur during API interactions, attempting to normalize them
-	 * into the toolkit's standard `APIError` format.
-	 *
-	 * It specifically checks for `OpenAI.APIError` instances to extract more detailed
-	 * information like status code and error type. Other errors are wrapped in a
-	 * generic `APIError`.
-	 *
-	 * @param {any} error - The error object caught during an API call.
-	 * @returns {APIError} A normalized `APIError` object.
-	 * @private
-	 */
-	private handleError(error: any): Error {
-		if (error instanceof APIError) {
-			return error;
-		}
-		if (error instanceof OpenAI.APIError) {
-			// Use a generic message but include specifics in details
-			return new APIError(`UBC LLM Sandbox API Error: ${error.message}`, error.status || 500, {
-				provider: 'ubc-llm-sandbox',
-				type: error.name,
-				code: error.code,
-				param: error.param,
-				originalError: error
-			});
-		}
-		// Handle potential network errors or other issues
-		if (error instanceof Error) {
-			return new APIError(`UBC LLM Sandbox Provider Error: ${error.message}`, 500, { provider: 'ubc-llm-sandbox', originalError: error });
-		}
-		return new APIError('Unknown error occurred while calling UBC LLM Sandbox API', 500, { provider: 'ubc-llm-sandbox' });
+		return describeApprovedSandboxModels();
 	}
 }

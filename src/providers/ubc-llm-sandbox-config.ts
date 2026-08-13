@@ -1,13 +1,18 @@
 /**
- * @fileoverview Deployment constants and configuration helpers for the UBC LLM
- * Sandbox.
+ * @fileoverview Deployment constants and policy for the UBC LLM Sandbox.
  *
  * The sandbox is a UBC-hosted, LiteLLM-fronted gateway presenting an
- * OpenAI-compatible API. Its 2026 deployment moved to
+ * OpenAI-compatible API. Its 2026 (B300) deployment moved to
  * `ai.apps.ctlt.ubc.ca` (production) / `ai-stg.apps.ctlt.ubc.ca` (staging) and
- * swapped the model roster for self-hosted open-weights models, so the
- * assumptions baked into the OpenAI mapping layer (only `gpt-5`/o-series can
- * reason) no longer describe it.
+ * swapped the model roster for self-hosted open-weights models.
+ *
+ * The sandbox is the **curated** of UBC's two gateways: it exposes only the
+ * approved B300 models, whatever else the underlying key can reach. Use the
+ * `ubc-llm-proxy` provider when you need the full entitlement of your key.
+ *
+ * Transport-level helpers (endpoint normalization, reasoning translation) are
+ * shared with the proxy and live in `litellm-gateway-config`; this module keeps
+ * the sandbox's names and its allowlist.
  *
  * Everything here is a pure function or constant — no client, no network — so
  * it is unit-testable in isolation.
@@ -15,10 +20,14 @@
 
 import { ConfigurationError } from 'ubc-genai-toolkit-core';
 import type { ReasoningEffort } from '../types';
+import { OpenAIReasoningCapability } from './openai-compat-mapping';
 import {
-	getOpenAIReasoningCapability,
-	OpenAIReasoningCapability,
-} from './openai-compat-mapping';
+	normalizeGatewayEndpoint,
+	getGatewayReasoningCapability,
+	coerceGatewayReasoningEffort,
+	resolveGatewayReasoning,
+	GatewayReasoningRequest,
+} from './litellm-gateway-config';
 
 /**
  * Base URLs for the UBC LLM Sandbox deployments.
@@ -37,11 +46,38 @@ export const UBC_LLM_SANDBOX_ENDPOINTS = {
 export type UbcLlmSandboxEnvironment = keyof typeof UBC_LLM_SANDBOX_ENDPOINTS;
 
 /**
- * Models served by the sandbox as of the 2026 deployment.
+ * **The** allowlist: every model the `ubc-llm-sandbox` provider will talk to.
  *
- * This is a convenience roster, not a validation allowlist — the sandbox's
- * catalogue changes without a toolkit release, and any id the gateway accepts
- * works. Call {@link LLMModule.getAvailableModels} for the live list.
+ * This is the single source of truth for sandbox model policy — `/models` is
+ * filtered to it, and both the configured default and any per-request override
+ * are checked against it, so a key with wider entitlements still only reaches
+ * these models through this provider.
+ *
+ * These are the approved B300 deployment ids as of 2026-08-12. The gateway's
+ * catalogue can change without a toolkit release: re-check
+ * `GET {endpoint}/models` on staging before shipping a change here, and update
+ * this list rather than working around it in a caller.
+ *
+ * Need a model that is not on this list? That is what `ubc-llm-proxy` is for.
+ */
+export const UBC_LLM_SANDBOX_APPROVED_MODELS = [
+	'gpt-oss-120b',
+	'qwen3.6-35b-a3b',
+	'qwen3-embedding-0.6b',
+] as const;
+
+/** A model id the sandbox provider accepts. */
+export type UbcLlmSandboxApprovedModel =
+	(typeof UBC_LLM_SANDBOX_APPROVED_MODELS)[number];
+
+const APPROVED_MODEL_SET: ReadonlySet<string> = new Set(
+	UBC_LLM_SANDBOX_APPROVED_MODELS
+);
+
+/**
+ * The approved models by role, for callers that would rather name a role than
+ * an id. Every value is drawn from {@link UBC_LLM_SANDBOX_APPROVED_MODELS} —
+ * the `satisfies` clause makes a typo here a compile error.
  */
 export const UBC_LLM_SANDBOX_MODELS = {
 	/** Reasoning model; accepts `reasoningEffort` of `low` | `medium` | `high`. */
@@ -50,19 +86,63 @@ export const UBC_LLM_SANDBOX_MODELS = {
 	chat: 'qwen3.6-35b-a3b',
 	/** Embedding model — set as `embeddingModel` to use `embed()`. */
 	embedding: 'qwen3-embedding-0.6b',
-} as const;
+} as const satisfies Record<string, UbcLlmSandboxApprovedModel>;
 
 /**
- * Route suffixes that get stripped when a caller configures a full request URL
- * (e.g. copied out of a `curl` example) instead of the API base.
+ * Whether a model id is on the sandbox allowlist.
+ *
+ * Comparison is exact: an id is a token the gateway defines, so
+ * `Qwen3.6-35b-a3b` or `qwen3.6-35b-a3b:latest` is a different model as far as
+ * this check is concerned, and is rejected rather than repaired.
  */
-const OPENAI_ROUTE_SUFFIXES = [
-	'/chat/completions',
-	'/completions',
-	'/embeddings',
-	'/responses',
-	'/models',
-];
+export function isApprovedSandboxModel(
+	model: string | undefined
+): model is UbcLlmSandboxApprovedModel {
+	return typeof model === 'string' && APPROVED_MODEL_SET.has(model);
+}
+
+/**
+ * Narrows a model list (e.g. the gateway's `/models` response) to the approved
+ * ids, preserving the gateway's own ordering and spelling.
+ */
+export function filterApprovedSandboxModels(models: string[]): string[] {
+	return models.filter((model) => isApprovedSandboxModel(model));
+}
+
+/**
+ * Throws unless `model` is on the sandbox allowlist.
+ *
+ * @param model The requested model id.
+ * @param purpose Whether it was requested for chat or embeddings; used in the message.
+ * @returns The model id, unchanged.
+ * @throws {ConfigurationError} When the model is not approved.
+ */
+export function assertApprovedSandboxModel(
+	model: string,
+	purpose: 'chat' | 'embedding' = 'chat'
+): string {
+	if (!isApprovedSandboxModel(model)) {
+		throw new ConfigurationError(
+			`Model '${model}' is not approved for the 'ubc-llm-sandbox' provider ` +
+				`(requested for ${purpose}). ${describeApprovedSandboxModels()}`,
+			{
+				provider: 'ubc-llm-sandbox',
+				model,
+				purpose,
+				approvedModels: [...UBC_LLM_SANDBOX_APPROVED_MODELS],
+			}
+		);
+	}
+	return model;
+}
+
+/** Shared tail for sandbox model errors: what is allowed, and the way out. */
+export function describeApprovedSandboxModels(): string {
+	return (
+		`Approved models: ${UBC_LLM_SANDBOX_APPROVED_MODELS.join(', ')}. ` +
+		"Use the 'ubc-llm-proxy' provider to reach other models your API key is entitled to."
+	);
+}
 
 /**
  * Normalizes a configured sandbox endpoint into the base URL the OpenAI client
@@ -86,183 +166,55 @@ const OPENAI_ROUTE_SUFFIXES = [
  * @throws {ConfigurationError} If the endpoint is empty or not a valid absolute URL.
  */
 export function normalizeSandboxEndpoint(endpoint: string): string {
-	const trimmed = (endpoint ?? '').trim();
-	if (!trimmed) {
-		throw new ConfigurationError(
-			'endpoint is required for the UBC LLM Sandbox provider ' +
-				`(e.g. '${UBC_LLM_SANDBOX_ENDPOINTS.staging}').`
-		);
-	}
-
-	let url: URL;
-	try {
-		url = new URL(trimmed);
-	} catch {
-		throw new ConfigurationError(
-			`Invalid UBC LLM Sandbox endpoint '${endpoint}': expected an absolute URL ` +
-				`such as '${UBC_LLM_SANDBOX_ENDPOINTS.staging}'.`
-		);
-	}
-
-	let path = url.pathname.replace(/\/+$/, '');
-
-	for (const suffix of OPENAI_ROUTE_SUFFIXES) {
-		if (path.endsWith(suffix)) {
-			path = path.slice(0, -suffix.length).replace(/\/+$/, '');
-			break;
-		}
-	}
-
-	const lastSegment = path.split('/').pop() ?? '';
-	if (!/^v\d+$/.test(lastSegment)) {
-		path = `${path}/v1`;
-	}
-
-	return `${url.origin}${path}`;
-}
-
-/**
- * True for models served by OpenAI's own API (whether called directly or
- * proxied through the sandbox), whose parameter rules OpenAI enforces strictly.
- *
- * `gpt-oss-*` is deliberately excluded: despite the `gpt-` prefix it is an
- * open-weights model self-hosted behind the sandbox, and it *does* take
- * `reasoning_effort`.
- */
-function isOpenAICloudModel(id: string): boolean {
-	if (id.startsWith('gpt-oss')) {
-		return false;
-	}
-	return /^(gpt-|o1|o3|o4-|chatgpt-)/.test(id);
+	return normalizeGatewayEndpoint(endpoint, {
+		label: 'UBC LLM Sandbox',
+		example: UBC_LLM_SANDBOX_ENDPOINTS.staging,
+	});
 }
 
 /**
  * Reasoning capability for a model reached through the sandbox.
  *
- * The sandbox proxies two very different kinds of model, so the rule follows
- * the model id rather than the provider:
- *
- * - OpenAI cloud models keep OpenAI's rules — sending `reasoning_effort` to
- *   `gpt-4o` is a hard error there, and the toolkit should say so up front.
- * - Everything else (self-hosted open-weights: `gpt-oss-120b`, `qwen3*`, …) is
- *   treated as `optional`, i.e. reasoning is forwarded when asked for. This is
- *   deliberately permissive: the sandbox roster changes without a toolkit
- *   release, and the gateway is a better judge of what a given model accepts
- *   than a hardcoded list that would block valid models.
+ * Shared with the proxy — see `getGatewayReasoningCapability`. Self-hosted
+ * models are treated as reasoning-capable; OpenAI cloud models keep OpenAI's
+ * stricter rules.
  */
 export function getSandboxReasoningCapability(
 	model: string
 ): OpenAIReasoningCapability {
-	const id = (model ?? '').trim().toLowerCase();
-	if (isOpenAICloudModel(id)) {
-		return getOpenAIReasoningCapability(id);
-	}
-	return 'optional';
+	return getGatewayReasoningCapability(model);
 }
 
 /**
- * The only efforts the gpt-oss harmony format understands.
- *
- * Measured against `ai-stg.apps.ctlt.ubc.ca` on 2026-08-05: `none`, `minimal`,
- * `xhigh` and `max` are all rejected with HTTP 400
- * (`"... is not supported by Harmony"`).
- */
-const GPT_OSS_EFFORTS: ReadonlySet<string> = new Set([
-	'low',
-	'medium',
-	'high',
-]);
-
-/**
  * Maps a toolkit {@link ReasoningEffort} onto a value the target sandbox model
- * actually accepts.
+ * actually accepts (`gpt-oss` only knows `low` | `medium` | `high`).
  *
- * `gpt-oss` only knows `low` | `medium` | `high`; the toolkit's wider scale
- * (inherited from OpenAI's gpt-5 family) would otherwise produce a 400 from the
- * gateway for perfectly reasonable callers — BiocBot, for instance, defaults to
- * `minimal`. Efforts are clamped to the nearest supported depth rather than
- * dropped, so the caller's intent survives.
- *
- * Models with no known constraint pass through untouched: the gateway rejects
- * what it cannot serve, which beats guessing here.
- *
- * @returns The effort to send, or `undefined` when none was requested.
+ * Shared with the proxy — see `coerceGatewayReasoningEffort`.
  */
 export function coerceSandboxReasoningEffort(
 	model: string,
 	effort: ReasoningEffort | string | undefined
 ): ReasoningEffort | string | undefined {
-	if (effort === undefined) {
-		return undefined;
-	}
-
-	const id = (model ?? '').trim().toLowerCase();
-	if (!id.startsWith('gpt-oss')) {
-		return effort;
-	}
-	if (GPT_OSS_EFFORTS.has(effort)) {
-		return effort;
-	}
-
-	// 'none' and 'minimal' both mean "reason as little as possible"; gpt-oss
-	// always reasons, so 'low' is the floor. 'xhigh'/'max' clamp to the ceiling.
-	switch (effort) {
-		case 'none':
-		case 'minimal':
-			return 'low';
-		case 'xhigh':
-		case 'max':
-			return 'high';
-		default:
-			// Unknown value — leave it alone so the shared validator reports it.
-			return effort;
-	}
+	return coerceGatewayReasoningEffort(model, effort);
 }
 
 /**
  * How a sandbox model's reasoning should be expressed on the wire.
  *
- * Two mutually exclusive mechanisms exist across the roster, so callers get one
- * knob (`reasoningEffort`) and this decides which mechanism it drives.
+ * @see GatewayReasoningRequest
  */
-export interface SandboxReasoningRequest {
-	/** Value for `reasoning_effort`, when the model reads that field. */
-	reasoningEffort?: ReasoningEffort | string;
-	/** Fields to merge into `chat_template_kwargs`, when it does not. */
-	chatTemplateKwargs?: Record<string, unknown>;
-}
+export type SandboxReasoningRequest = GatewayReasoningRequest;
 
 /**
  * Translates a toolkit {@link ReasoningEffort} into whichever native mechanism
- * the target sandbox model actually uses.
+ * the target sandbox model uses — `reasoning_effort` for `gpt-oss`, a
+ * `chat_template_kwargs` thinking toggle for Qwen3.
  *
- * - **gpt-oss** reads `reasoning_effort`, clamped to its `low`/`medium`/`high`
- *   scale (see {@link coerceSandboxReasoningEffort}).
- * - **Qwen3** ignores `reasoning_effort` entirely and toggles thinking through
- *   its chat template, so `reasoningEffort: 'none'` becomes
- *   `chat_template_kwargs: { enable_thinking: false }`.
- *
- * That second case is not a nicety. Qwen3 thinks by default and the chain of
- * thought is billed against `max_tokens` before any visible content is emitted,
- * so a request with a modest budget returns `finish_reason: 'length'` and an
- * **empty string** — measured on staging as ~1000 completion tokens for a
- * two-field JSON object, versus 39 with thinking off. Callers asking for
- * `'none'` would otherwise silently keep paying that cost.
+ * Shared with the proxy — see `resolveGatewayReasoning`.
  */
 export function resolveSandboxReasoning(
 	model: string,
 	effort: ReasoningEffort | string | undefined
 ): SandboxReasoningRequest {
-	const id = (model ?? '').trim().toLowerCase();
-
-	if (id.startsWith('qwen3')) {
-		if (effort === 'none') {
-			return { chatTemplateKwargs: { enable_thinking: false } };
-		}
-		// Any other depth: leave the template at its default (thinking on) and
-		// forward the effort in case the gateway grows support for it.
-		return { reasoningEffort: effort };
-	}
-
-	return { reasoningEffort: coerceSandboxReasoningEffort(model, effort) };
+	return resolveGatewayReasoning(model, effort);
 }

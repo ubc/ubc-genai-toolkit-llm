@@ -1,12 +1,121 @@
 import { describe, it, expect } from 'vitest';
+import { ConfigurationError } from 'ubc-genai-toolkit-core';
 import {
 	UBC_LLM_SANDBOX_ENDPOINTS,
 	UBC_LLM_SANDBOX_MODELS,
+	UBC_LLM_SANDBOX_APPROVED_MODELS,
+	isApprovedSandboxModel,
+	filterApprovedSandboxModels,
+	assertApprovedSandboxModel,
 	normalizeSandboxEndpoint,
 	getSandboxReasoningCapability,
 	coerceSandboxReasoningEffort,
 	resolveSandboxReasoning,
 } from '../src/providers/ubc-llm-sandbox-config';
+
+describe('UBC_LLM_SANDBOX_APPROVED_MODELS', () => {
+	it('is the single source of truth the role roster draws from', () => {
+		for (const model of Object.values(UBC_LLM_SANDBOX_MODELS)) {
+			expect(UBC_LLM_SANDBOX_APPROVED_MODELS).toContain(model);
+		}
+	});
+
+	it('lists the approved B300 chat, reasoning, and embedding models', () => {
+		// Pinned deliberately: changing this list changes what the sandbox
+		// provider will talk to, and should be a conscious edit verified against
+		// `GET {endpoint}/models` on staging.
+		expect([...UBC_LLM_SANDBOX_APPROVED_MODELS]).toEqual([
+			'gpt-oss-120b',
+			'qwen3.6-35b-a3b',
+			'qwen3-embedding-0.6b',
+		]);
+	});
+
+	it('has no duplicates', () => {
+		expect(new Set(UBC_LLM_SANDBOX_APPROVED_MODELS).size).toBe(
+			UBC_LLM_SANDBOX_APPROVED_MODELS.length
+		);
+	});
+});
+
+describe('isApprovedSandboxModel', () => {
+	it('accepts every approved id', () => {
+		for (const model of UBC_LLM_SANDBOX_APPROVED_MODELS) {
+			expect(isApprovedSandboxModel(model)).toBe(true);
+		}
+	});
+
+	it('rejects models the key may otherwise be entitled to', () => {
+		expect(isApprovedSandboxModel('gpt-4o')).toBe(false);
+		expect(isApprovedSandboxModel('claude-sonnet-4-5-20250929')).toBe(false);
+		expect(isApprovedSandboxModel('nomic-embed-text')).toBe(false);
+	});
+
+	it('matches exactly — no case folding, trimming, or suffix repair', () => {
+		expect(isApprovedSandboxModel('GPT-OSS-120B')).toBe(false);
+		expect(isApprovedSandboxModel(' gpt-oss-120b')).toBe(false);
+		expect(isApprovedSandboxModel('gpt-oss-120b:latest')).toBe(false);
+		expect(isApprovedSandboxModel('openai/gpt-oss-120b')).toBe(false);
+	});
+
+	it('handles a missing model id', () => {
+		expect(isApprovedSandboxModel(undefined)).toBe(false);
+		expect(isApprovedSandboxModel('')).toBe(false);
+	});
+});
+
+describe('filterApprovedSandboxModels', () => {
+	it('keeps only approved ids, in the order given', () => {
+		expect(
+			filterApprovedSandboxModels([
+				'gpt-4o',
+				'qwen3.6-35b-a3b',
+				'nomic-embed-text',
+				'gpt-oss-120b',
+			])
+		).toEqual(['qwen3.6-35b-a3b', 'gpt-oss-120b']);
+	});
+
+	it('returns an empty list rather than a fallback when nothing is approved', () => {
+		expect(filterApprovedSandboxModels(['gpt-4o', 'gpt-4.1-mini'])).toEqual([]);
+	});
+});
+
+describe('assertApprovedSandboxModel', () => {
+	it('returns an approved model unchanged', () => {
+		expect(assertApprovedSandboxModel(UBC_LLM_SANDBOX_MODELS.chat)).toBe(
+			UBC_LLM_SANDBOX_MODELS.chat
+		);
+	});
+
+	it('throws a ConfigurationError naming the approved models', () => {
+		const error = (() => {
+			try {
+				assertApprovedSandboxModel('gpt-4o', 'chat');
+			} catch (e) {
+				return e as ConfigurationError;
+			}
+		})();
+
+		expect(error).toBeInstanceOf(ConfigurationError);
+		expect(error!.message).toContain("Model 'gpt-4o' is not approved");
+		for (const approved of UBC_LLM_SANDBOX_APPROVED_MODELS) {
+			expect(error!.message).toContain(approved);
+		}
+		expect(error!.message).toContain('ubc-llm-proxy');
+		expect(error!.details).toMatchObject({
+			provider: 'ubc-llm-sandbox',
+			model: 'gpt-4o',
+			purpose: 'chat',
+		});
+	});
+
+	it('reports the purpose it was called for', () => {
+		expect(() =>
+			assertApprovedSandboxModel('text-embedding-3-large', 'embedding')
+		).toThrowError(/requested for embedding/);
+	});
+});
 
 describe('normalizeSandboxEndpoint', () => {
 	it('leaves a correct base URL untouched', () => {

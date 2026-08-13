@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import { NoopLogger } from 'ubc-genai-toolkit-core';
+import { ConfigurationError, NoopLogger } from 'ubc-genai-toolkit-core';
 import type { Message } from '../src/types';
 
 const createMock = vi.fn();
@@ -23,7 +23,10 @@ vi.mock('openai', () => {
 });
 
 import { UbcLlmSandboxProvider } from '../src/providers/ubc-llm-sandbox-provider';
-import { UBC_LLM_SANDBOX_MODELS } from '../src/providers/ubc-llm-sandbox-config';
+import {
+	UBC_LLM_SANDBOX_MODELS,
+	UBC_LLM_SANDBOX_APPROVED_MODELS,
+} from '../src/providers/ubc-llm-sandbox-config';
 
 const calculator = {
 	name: 'calculator',
@@ -31,7 +34,7 @@ const calculator = {
 	parameters: z.object({ expression: z.string() }),
 };
 
-function makeProvider(defaultModel = 'llama3.1') {
+function makeProvider(defaultModel: string = UBC_LLM_SANDBOX_MODELS.chat) {
 	return new UbcLlmSandboxProvider(
 		'key',
 		'https://sandbox.example.ca/v1',
@@ -59,7 +62,7 @@ describe('UbcLlmSandboxProvider tool calling', () => {
 		createMock.mockResolvedValue({
 			id: 'x',
 			created: 1,
-			model: 'llama3.1',
+			model: UBC_LLM_SANDBOX_MODELS.chat,
 			choices: [
 				{
 					finish_reason: 'tool_calls',
@@ -101,7 +104,11 @@ describe('UbcLlmSandboxProvider tool calling', () => {
 		await provider.streamConversation(
 			[{ role: 'user', content: 'hi' }],
 			(c) => chunks.push(c),
-			{ model: 'gpt-5-mini', tools: [calculator], reasoningEffort: 'low' }
+			{
+				model: UBC_LLM_SANDBOX_MODELS.reasoning,
+				tools: [calculator],
+				reasoningEffort: 'low',
+			}
 		);
 
 		const params = createMock.mock.calls[0][0];
@@ -115,49 +122,34 @@ describe('UbcLlmSandboxProvider tool calling', () => {
 
 describe('UbcLlmSandboxProvider option mapping', () => {
 	it('preserves BiocBot snake_case fields on sendConversation', async () => {
-		createMock.mockResolvedValue({
-			id: 'x',
-			created: 1,
-			model: 'gpt-5-nano',
-			choices: [
-				{ finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
-			],
-		});
+		mockChatResponse(UBC_LLM_SANDBOX_MODELS.reasoning);
 
 		const provider = makeProvider();
-		await provider.sendConversation(
-			[{ role: 'user', content: 'hi' }],
-			{
-				model: 'gpt-5-nano',
-				reasoning_effort: 'low',
-				max_completion_tokens: 2000,
-			} as any
-		);
+		await provider.sendConversation([{ role: 'user', content: 'hi' }], {
+			model: UBC_LLM_SANDBOX_MODELS.reasoning,
+			reasoning_effort: 'low',
+			// Sandbox models are self-hosted, so the budget goes out as max_tokens
+			// whichever spelling the caller used.
+			max_completion_tokens: 2000,
+		} as any);
 
 		const params = createMock.mock.calls[0][0];
 		expect(params.reasoning_effort).toBe('low');
-		expect(params.max_completion_tokens).toBe(2000);
-		expect(params.max_tokens).toBeUndefined();
+		expect(params.max_tokens).toBe(2000);
+		expect(params.max_completion_tokens).toBeUndefined();
 		expect(params.stream).toBe(false);
 	});
 
 	it('preserves BiocBot raw response_format passthrough', async () => {
-		createMock.mockResolvedValue({
-			id: 'x',
-			created: 1,
-			model: 'gpt-5-nano',
-			choices: [
-				{ finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
-			],
-		});
+		mockChatResponse(UBC_LLM_SANDBOX_MODELS.chat);
 
 		const provider = makeProvider();
 
 		await provider.sendConversation(
 			[{ role: 'user', content: 'generate JSON' }],
 			{
-				model: 'gpt-5-nano',
-				reasoning_effort: 'low',
+				model: UBC_LLM_SANDBOX_MODELS.chat,
+				reasoningEffort: 'none',
 				max_completion_tokens: 4000,
 				response_format: { type: 'json_object' },
 			} as any
@@ -170,7 +162,7 @@ describe('UbcLlmSandboxProvider option mapping', () => {
 		});
 	});
 
-	it('maps older-model maxTokens to max_tokens on stream', async () => {
+	it('maps maxTokens to max_tokens on stream for self-hosted models', async () => {
 		async function* fakeStream() {
 			yield { choices: [{ delta: { content: 'a' }, finish_reason: null }] };
 			yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
@@ -181,7 +173,7 @@ describe('UbcLlmSandboxProvider option mapping', () => {
 		await provider.streamConversation(
 			[{ role: 'user', content: 'hi' }],
 			() => {},
-			{ model: 'gpt-4.1-mini', maxTokens: 1000 }
+			{ model: UBC_LLM_SANDBOX_MODELS.chat, maxTokens: 1000 }
 		);
 
 		const params = createMock.mock.calls[0][0];
@@ -293,38 +285,161 @@ describe('UbcLlmSandboxProvider option mapping', () => {
 		});
 	});
 
-	it('still rejects reasoning on OpenAI models proxied through the sandbox', async () => {
-		const provider = makeProvider();
-		await expect(
-			provider.sendConversation([{ role: 'user', content: 'hi' }], {
-				model: 'gpt-4o',
-				reasoningEffort: 'low',
-			})
-		).rejects.toThrowError(/does not support reasoningEffort/);
-	});
-
 	it('does not let passthrough override model, messages, or stream', async () => {
-		createMock.mockResolvedValue({
-			id: 'x',
-			created: 1,
-			model: 'gpt-4o',
-			choices: [
-				{ finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
-			],
-		});
+		mockChatResponse(UBC_LLM_SANDBOX_MODELS.chat);
 
 		const provider = makeProvider();
 		const messages: Message[] = [{ role: 'user', content: 'real' }];
 		await provider.sendConversation(messages, {
-			model: 'gpt-4o',
+			model: UBC_LLM_SANDBOX_MODELS.chat,
 			messages: [{ role: 'user', content: 'hijack' }],
 			stream: true,
 		} as any);
 
 		const params = createMock.mock.calls[0][0];
-		expect(params.model).toBe('gpt-4o');
+		expect(params.model).toBe(UBC_LLM_SANDBOX_MODELS.chat);
 		expect(params.messages).toEqual([{ role: 'user', content: 'real' }]);
 		expect(params.stream).toBe(false);
+	});
+});
+
+describe('UbcLlmSandboxProvider approved-model policy', () => {
+	/** A model the underlying key may well be entitled to, but the sandbox is not. */
+	const OFF_POLICY_MODEL = 'gpt-4o';
+
+	function mockModelList(provider: UbcLlmSandboxProvider, ids: string[]) {
+		const list = (provider as any).client.models.list;
+		list.mockResolvedValue({ data: ids.map((id) => ({ id })) });
+		return list;
+	}
+
+	it('exposes only approved models from /models', async () => {
+		const provider = makeProvider();
+		mockModelList(provider, [
+			'gpt-4o',
+			UBC_LLM_SANDBOX_MODELS.chat,
+			'claude-sonnet-4-5-20250929',
+			UBC_LLM_SANDBOX_MODELS.reasoning,
+			'nomic-embed-text',
+			UBC_LLM_SANDBOX_MODELS.embedding,
+		]);
+
+		const models = await provider.getAvailableModels();
+
+		expect(models).toEqual([
+			UBC_LLM_SANDBOX_MODELS.chat,
+			UBC_LLM_SANDBOX_MODELS.reasoning,
+			UBC_LLM_SANDBOX_MODELS.embedding,
+		]);
+		expect(models).toHaveLength(UBC_LLM_SANDBOX_APPROVED_MODELS.length);
+	});
+
+	it('reports nothing when the gateway serves no approved model', async () => {
+		const provider = makeProvider();
+		mockModelList(provider, ['gpt-4o', 'gpt-4.1-mini']);
+
+		expect(await provider.getAvailableModels()).toEqual([]);
+	});
+
+	it('rejects a disallowed per-request model even though the key can reach it', async () => {
+		const provider = makeProvider();
+
+		await expect(
+			provider.sendConversation([{ role: 'user', content: 'hi' }], {
+				model: OFF_POLICY_MODEL,
+			})
+		).rejects.toThrowError(/not approved for the 'ubc-llm-sandbox' provider/);
+		// Rejected before anything left the process.
+		expect(createMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects a disallowed configured default model', async () => {
+		const provider = makeProvider(OFF_POLICY_MODEL);
+
+		await expect(
+			provider.sendMessage('hi')
+		).rejects.toThrowError(/not approved for the 'ubc-llm-sandbox' provider/);
+		expect(createMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects a disallowed model on the streaming path', async () => {
+		const provider = makeProvider();
+
+		await expect(
+			provider.streamConversation([{ role: 'user', content: 'hi' }], () => {}, {
+				model: OFF_POLICY_MODEL,
+			})
+		).rejects.toThrowError(/not approved/);
+		expect(createMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects a disallowed embedding model', async () => {
+		const provider = new UbcLlmSandboxProvider(
+			'key',
+			'https://ai-stg.apps.ctlt.ubc.ca/v1',
+			UBC_LLM_SANDBOX_MODELS.chat,
+			new NoopLogger(),
+			{ embeddingModel: 'text-embedding-3-large' }
+		);
+		const post = (provider as any).client.post;
+
+		await expect(provider.embed(['hello'])).rejects.toThrowError(/not approved/);
+		expect(post).not.toHaveBeenCalled();
+	});
+
+	it('matches approved ids exactly rather than repairing near-misses', async () => {
+		const provider = makeProvider();
+
+		for (const nearMiss of [
+			'Qwen3.6-35b-a3b', // wrong case
+			`${UBC_LLM_SANDBOX_MODELS.chat}:latest`, // added suffix
+			' qwen3.6-35b-a3b', // stray whitespace
+			'qwen3.6-35b', // truncated
+		]) {
+			await expect(
+				provider.sendConversation([{ role: 'user', content: 'hi' }], {
+					model: nearMiss,
+				})
+			).rejects.toThrowError(/not approved/);
+		}
+		expect(createMock).not.toHaveBeenCalled();
+	});
+
+	it('raises a ConfigurationError naming the approved models and the way out', async () => {
+		const provider = makeProvider();
+
+		const error = await provider
+			.sendConversation([{ role: 'user', content: 'hi' }], {
+				model: OFF_POLICY_MODEL,
+			})
+			.catch((e) => e);
+
+		expect(error).toBeInstanceOf(ConfigurationError);
+		expect(error.code).toBe(400);
+		for (const approved of UBC_LLM_SANDBOX_APPROVED_MODELS) {
+			expect(error.message).toContain(approved);
+		}
+		expect(error.message).toContain('ubc-llm-proxy');
+		expect(error.details).toMatchObject({
+			provider: 'ubc-llm-sandbox',
+			model: OFF_POLICY_MODEL,
+			purpose: 'chat',
+		});
+	});
+
+	it('still applies OpenAI reasoning rules to an approved model that has them', async () => {
+		// gpt-oss-120b looks like an OpenAI id but is self-hosted: reasoning is
+		// forwarded rather than rejected. (The strict-OpenAI branch is exercised
+		// through the proxy provider, which can reach those models.)
+		mockChatResponse(UBC_LLM_SANDBOX_MODELS.reasoning);
+		const provider = makeProvider();
+
+		await provider.sendConversation([{ role: 'user', content: 'hi' }], {
+			model: UBC_LLM_SANDBOX_MODELS.reasoning,
+			reasoningEffort: 'low',
+		});
+
+		expect(createMock.mock.calls[0][0].reasoning_effort).toBe('low');
 	});
 });
 
@@ -351,55 +466,29 @@ describe('UbcLlmSandboxProvider endpoint handling', () => {
 
 	it('rejects a missing endpoint', () => {
 		expect(
-			() =>
-				new UbcLlmSandboxProvider('key', '', 'model', new NoopLogger())
+			() => new UbcLlmSandboxProvider('key', '', 'model', new NoopLogger())
 		).toThrowError(/Endpoint is required/);
 	});
 });
 
 describe('UbcLlmSandboxProvider embeddings', () => {
-	it('keeps the legacy default model but warns, naming the current one', async () => {
-		const logger = new NoopLogger();
-		const warn = vi.spyOn(logger, 'warn');
+	it('fails with a clear error when no embedding model is configured', async () => {
 		const provider = new UbcLlmSandboxProvider(
 			'key',
 			'https://ai-stg.apps.ctlt.ubc.ca/v1',
 			UBC_LLM_SANDBOX_MODELS.chat,
-			logger
+			new NoopLogger()
 		);
 		const post = (provider as any).client.post;
-		post.mockResolvedValue({
-			data: [{ embedding: [0.1] }],
-			model: 'nomic-embed-text',
-			usage: {},
-		});
 
-		await provider.embed(['hello']);
+		const error = await provider.embed(['hello']).catch((e) => e);
 
-		// Backwards compatible: the request still goes out with the old default...
-		expect(post.mock.calls[0][1].body.model).toBe('nomic-embed-text');
-		// ...but the caller is told, and pointed at the current sandbox model.
-		expect(warn).toHaveBeenCalledOnce();
-		expect(warn.mock.calls[0][0]).toContain('nomic-embed-text');
-		expect(warn.mock.calls[0][0]).toContain(UBC_LLM_SANDBOX_MODELS.embedding);
-	});
-
-	it('does not warn when an embedding model is configured', async () => {
-		const logger = new NoopLogger();
-		const warn = vi.spyOn(logger, 'warn');
-		const provider = new UbcLlmSandboxProvider(
-			'key',
-			'https://ai-stg.apps.ctlt.ubc.ca/v1',
-			UBC_LLM_SANDBOX_MODELS.chat,
-			logger,
-			{ embeddingModel: UBC_LLM_SANDBOX_MODELS.embedding }
-		);
-		const post = (provider as any).client.post;
-		post.mockResolvedValue({ data: [{ embedding: [0.1] }], model: 'm', usage: {} });
-
-		await provider.embed(['hello']);
-
-		expect(warn).not.toHaveBeenCalled();
+		expect(error).toBeInstanceOf(ConfigurationError);
+		// Names the setting to change and the model to put in it, rather than
+		// silently substituting one (pre-0.7.0 behavior).
+		expect(error.message).toContain('embeddingModel');
+		expect(error.message).toContain(UBC_LLM_SANDBOX_MODELS.embedding);
+		expect(post).not.toHaveBeenCalled();
 	});
 
 	it('uses the configured embedding model', async () => {
@@ -425,5 +514,23 @@ describe('UbcLlmSandboxProvider embeddings', () => {
 			input: ['hello'],
 		});
 		expect(response.embeddings).toEqual([[0.1, 0.2]]);
+	});
+
+	it('accepts an approved embedding model passed per request', async () => {
+		const provider = makeProvider();
+		const post = (provider as any).client.post;
+		post.mockResolvedValue({
+			data: [{ embedding: [0.3] }],
+			model: UBC_LLM_SANDBOX_MODELS.embedding,
+			usage: {},
+		});
+
+		await provider.embed(['hello'], {
+			model: UBC_LLM_SANDBOX_MODELS.embedding,
+		});
+
+		expect(post.mock.calls[0][1].body.model).toBe(
+			UBC_LLM_SANDBOX_MODELS.embedding
+		);
 	});
 });
