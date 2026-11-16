@@ -36,8 +36,8 @@
  * ```
  * LLM_PROVIDER=ubc-llm-sandbox
  * LLM_API_KEY=<your sandbox key>
- * LLM_ENDPOINT=https://ai-stg.apps.ctlt.ubc.ca/v1   # production: https://ai.apps.ctlt.ubc.ca/v1
- * LLM_DEFAULT_MODEL=qwen3.6-35b-a3b                 # or gpt-oss-120b for reasoning
+ * LLM_ENDPOINT=https://ai-stg.apps.ctlt.ubc.ca/v1   # production: https://ai-gateway.apps.ltic.ubc.ca/v1
+ * LLM_DEFAULT_MODEL=qwen3.6-35b-a3b                 # or qwen3.8-27b for reasoning
  * LLM_EMBEDDING_MODEL=qwen3-embedding-0.6b
  * ```
  *

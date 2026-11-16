@@ -183,7 +183,7 @@ describe('UbcLlmSandboxProvider option mapping', () => {
 		expect(params.stream).toBe(true);
 	});
 
-	it('sends reasoning_effort for gpt-oss-120b instead of rejecting it', async () => {
+	it('sends reasoning_effort for the reasoning model instead of rejecting it', async () => {
 		mockChatResponse(UBC_LLM_SANDBOX_MODELS.reasoning);
 
 		const provider = makeProvider();
@@ -195,21 +195,26 @@ describe('UbcLlmSandboxProvider option mapping', () => {
 
 		const params = createMock.mock.calls[0][0];
 		expect(params.reasoning_effort).toBe('high');
-		// gpt-oss is served by the sandbox, not OpenAI: it takes max_tokens.
+		// Self-hosted by the sandbox, not OpenAI: it takes max_tokens.
 		expect(params.max_tokens).toBe(2000);
 		expect(params.max_completion_tokens).toBeUndefined();
 	});
 
-	it("clamps BiocBot's default 'minimal' effort into the gpt-oss scale", async () => {
+	it("turns thinking off on the reasoning model for reasoningEffort 'none'", async () => {
+		// The reasoning slot is a Qwen3 model now (qwen3.8-27b replaced
+		// gpt-oss-120b), so 'none' drives the chat-template toggle instead of
+		// being clamped to reasoning_effort 'low'.
 		mockChatResponse(UBC_LLM_SANDBOX_MODELS.reasoning);
 
 		const provider = makeProvider();
 		await provider.sendConversation([{ role: 'user', content: 'hi' }], {
 			model: UBC_LLM_SANDBOX_MODELS.reasoning,
-			reasoning_effort: 'minimal',
-		} as any);
+			reasoningEffort: 'none',
+		});
 
-		expect(createMock.mock.calls[0][0].reasoning_effort).toBe('low');
+		const params = createMock.mock.calls[0][0];
+		expect(params.chat_template_kwargs).toEqual({ enable_thinking: false });
+		expect(params.reasoning_effort).toBeUndefined();
 	});
 
 	it('forwards reasoningEffort for chat models the roster may add later', async () => {
@@ -319,6 +324,7 @@ describe('UbcLlmSandboxProvider approved-model policy', () => {
 			'gpt-4o',
 			UBC_LLM_SANDBOX_MODELS.chat,
 			'claude-sonnet-4-5-20250929',
+			'gpt-oss-120b', // deprecated, may linger in a gateway's catalogue
 			UBC_LLM_SANDBOX_MODELS.reasoning,
 			'nomic-embed-text',
 			UBC_LLM_SANDBOX_MODELS.embedding,
@@ -427,19 +433,23 @@ describe('UbcLlmSandboxProvider approved-model policy', () => {
 		});
 	});
 
-	it('still applies OpenAI reasoning rules to an approved model that has them', async () => {
-		// gpt-oss-120b looks like an OpenAI id but is self-hosted: reasoning is
-		// forwarded rather than rejected. (The strict-OpenAI branch is exercised
-		// through the proxy provider, which can reach those models.)
-		mockChatResponse(UBC_LLM_SANDBOX_MODELS.reasoning);
+	it('rejects the deprecated gpt-oss-120b and points to ubc-llm-proxy', async () => {
+		// gpt-oss-120b was the sandbox's reasoning model until it was deprecated
+		// on the gateway; callers still pinned to it get a clear local error
+		// instead of a gateway 404.
 		const provider = makeProvider();
 
-		await provider.sendConversation([{ role: 'user', content: 'hi' }], {
-			model: UBC_LLM_SANDBOX_MODELS.reasoning,
-			reasoningEffort: 'low',
-		});
+		const error = await provider
+			.sendConversation([{ role: 'user', content: 'hi' }], {
+				model: 'gpt-oss-120b',
+				reasoningEffort: 'low',
+			})
+			.catch((e) => e);
 
-		expect(createMock.mock.calls[0][0].reasoning_effort).toBe('low');
+		expect(error).toBeInstanceOf(ConfigurationError);
+		expect(error.message).toContain("Model 'gpt-oss-120b' is not approved");
+		expect(error.message).toContain('ubc-llm-proxy');
+		expect(createMock).not.toHaveBeenCalled();
 	});
 });
 
@@ -457,11 +467,11 @@ describe('UbcLlmSandboxProvider endpoint handling', () => {
 	it('appends /v1 when only the host is configured', () => {
 		new UbcLlmSandboxProvider(
 			'key',
-			'https://ai.apps.ctlt.ubc.ca',
+			'https://ai-gateway.apps.ltic.ubc.ca',
 			UBC_LLM_SANDBOX_MODELS.chat,
 			new NoopLogger()
 		);
-		expect(clientOptions[0].baseURL).toBe('https://ai.apps.ctlt.ubc.ca/v1');
+		expect(clientOptions[0].baseURL).toBe('https://ai-gateway.apps.ltic.ubc.ca/v1');
 	});
 
 	it('rejects a missing endpoint', () => {

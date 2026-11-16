@@ -2,9 +2,10 @@
  * @fileoverview Deployment constants and policy for the UBC LLM Sandbox.
  *
  * The sandbox is a UBC-hosted, LiteLLM-fronted gateway presenting an
- * OpenAI-compatible API. Its 2026 (B300) deployment moved to
- * `ai.apps.ctlt.ubc.ca` (production) / `ai-stg.apps.ctlt.ubc.ca` (staging) and
- * swapped the model roster for self-hosted open-weights models.
+ * OpenAI-compatible API. Its 2026 (B300) deployment swapped the model roster
+ * for self-hosted open-weights models. Production now lives at
+ * `ai-gateway.apps.ltic.ubc.ca` (moved from `ai.apps.ctlt.ubc.ca` in November
+ * 2026); staging remains at `ai-stg.apps.ctlt.ubc.ca`.
  *
  * The sandbox is the **curated** of UBC's two gateways: it exposes only the
  * approved B300 models, whatever else the underlying key can reach. Use the
@@ -39,8 +40,11 @@ import {
 export const UBC_LLM_SANDBOX_ENDPOINTS = {
 	/** Staging — use this for development and testing. */
 	staging: 'https://ai-stg.apps.ctlt.ubc.ca/v1',
-	/** Production — same service, same model roster, no `-stg`. */
-	production: 'https://ai.apps.ctlt.ubc.ca/v1',
+	/**
+	 * Production. Moved off `ai.apps.ctlt.ubc.ca` (which no longer responds)
+	 * in November 2026; staging was not moved.
+	 */
+	production: 'https://ai-gateway.apps.ltic.ubc.ca/v1',
 } as const;
 
 export type UbcLlmSandboxEnvironment = keyof typeof UBC_LLM_SANDBOX_ENDPOINTS;
@@ -53,15 +57,16 @@ export type UbcLlmSandboxEnvironment = keyof typeof UBC_LLM_SANDBOX_ENDPOINTS;
  * are checked against it, so a key with wider entitlements still only reaches
  * these models through this provider.
  *
- * These are the approved B300 deployment ids as of 2026-08-12. The gateway's
- * catalogue can change without a toolkit release: re-check
+ * These are the approved B300 deployment ids as of 2026-11-16. `gpt-oss-120b`
+ * was deprecated on the gateway and is temporarily replaced by `qwen3.8-27b`.
+ * The gateway's catalogue can change without a toolkit release: re-check
  * `GET {endpoint}/models` on staging before shipping a change here, and update
  * this list rather than working around it in a caller.
  *
  * Need a model that is not on this list? That is what `ubc-llm-proxy` is for.
  */
 export const UBC_LLM_SANDBOX_APPROVED_MODELS = [
-	'gpt-oss-120b',
+	'qwen3.8-27b',
 	'qwen3.6-35b-a3b',
 	'qwen3-embedding-0.6b',
 ] as const;
@@ -80,8 +85,12 @@ const APPROVED_MODEL_SET: ReadonlySet<string> = new Set(
  * the `satisfies` clause makes a typo here a compile error.
  */
 export const UBC_LLM_SANDBOX_MODELS = {
-	/** Reasoning model; accepts `reasoningEffort` of `low` | `medium` | `high`. */
-	reasoning: 'gpt-oss-120b',
+	/**
+	 * Reasoning model. Temporarily `qwen3.8-27b`, standing in for the
+	 * deprecated `gpt-oss-120b`. As a Qwen3 model it thinks by default;
+	 * `reasoningEffort: 'none'` turns thinking off.
+	 */
+	reasoning: 'qwen3.8-27b',
 	/** General-purpose chat model (mixture-of-experts). */
 	chat: 'qwen3.6-35b-a3b',
 	/** Embedding model — set as `embeddingModel` to use `embed()`. */

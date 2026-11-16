@@ -25,7 +25,7 @@ describe('UBC_LLM_SANDBOX_APPROVED_MODELS', () => {
 		// provider will talk to, and should be a conscious edit verified against
 		// `GET {endpoint}/models` on staging.
 		expect([...UBC_LLM_SANDBOX_APPROVED_MODELS]).toEqual([
-			'gpt-oss-120b',
+			'qwen3.8-27b',
 			'qwen3.6-35b-a3b',
 			'qwen3-embedding-0.6b',
 		]);
@@ -52,10 +52,14 @@ describe('isApprovedSandboxModel', () => {
 	});
 
 	it('matches exactly — no case folding, trimming, or suffix repair', () => {
-		expect(isApprovedSandboxModel('GPT-OSS-120B')).toBe(false);
-		expect(isApprovedSandboxModel(' gpt-oss-120b')).toBe(false);
-		expect(isApprovedSandboxModel('gpt-oss-120b:latest')).toBe(false);
-		expect(isApprovedSandboxModel('openai/gpt-oss-120b')).toBe(false);
+		expect(isApprovedSandboxModel('QWEN3.8-27B')).toBe(false);
+		expect(isApprovedSandboxModel(' qwen3.8-27b')).toBe(false);
+		expect(isApprovedSandboxModel('qwen3.8-27b:latest')).toBe(false);
+		expect(isApprovedSandboxModel('qwen/qwen3.8-27b')).toBe(false);
+	});
+
+	it('no longer approves the deprecated gpt-oss-120b', () => {
+		expect(isApprovedSandboxModel('gpt-oss-120b')).toBe(false);
 	});
 
 	it('handles a missing model id', () => {
@@ -70,10 +74,11 @@ describe('filterApprovedSandboxModels', () => {
 			filterApprovedSandboxModels([
 				'gpt-4o',
 				'qwen3.6-35b-a3b',
-				'nomic-embed-text',
 				'gpt-oss-120b',
+				'nomic-embed-text',
+				'qwen3.8-27b',
 			])
-		).toEqual(['qwen3.6-35b-a3b', 'gpt-oss-120b']);
+		).toEqual(['qwen3.6-35b-a3b', 'qwen3.8-27b']);
 	});
 
 	it('returns an empty list rather than a fallback when nothing is approved', () => {
@@ -123,7 +128,7 @@ describe('normalizeSandboxEndpoint', () => {
 			'https://ai-stg.apps.ctlt.ubc.ca/v1'
 		);
 		expect(normalizeSandboxEndpoint(UBC_LLM_SANDBOX_ENDPOINTS.production)).toBe(
-			'https://ai.apps.ctlt.ubc.ca/v1'
+			'https://ai-gateway.apps.ltic.ubc.ca/v1'
 		);
 	});
 
@@ -137,8 +142,11 @@ describe('normalizeSandboxEndpoint', () => {
 		expect(
 			normalizeSandboxEndpoint('https://ai-stg.apps.ctlt.ubc.ca/v1/')
 		).toBe('https://ai-stg.apps.ctlt.ubc.ca/v1');
-		expect(normalizeSandboxEndpoint('https://ai.apps.ctlt.ubc.ca///')).toBe(
-			'https://ai.apps.ctlt.ubc.ca/v1'
+		expect(
+			normalizeSandboxEndpoint('https://ai-gateway.apps.ltic.ubc.ca/v1/')
+		).toBe('https://ai-gateway.apps.ltic.ubc.ca/v1');
+		expect(normalizeSandboxEndpoint('https://ai-gateway.apps.ltic.ubc.ca///')).toBe(
+			'https://ai-gateway.apps.ltic.ubc.ca/v1'
 		);
 	});
 
