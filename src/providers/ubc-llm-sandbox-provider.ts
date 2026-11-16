@@ -17,14 +17,14 @@
  * - Supports standard chat completion (`sendMessage`, `sendConversation`).
  * - Supports streaming chat completion (`streamConversation`).
  * - Supports tool calling and multi-modal (image) messages.
- * - Supports reasoning models via `reasoningEffort` (e.g. `gpt-oss-120b`).
+ * - Supports reasoning models via `reasoningEffort` (e.g. `qwen3.8-27b`).
  * - Supports text embedding generation (`embed`).
  * - Maps UBC LLM Sandbox API responses and errors to the toolkit's standard interfaces.
  * - Requires an explicit endpoint URL during instantiation, unlike some other providers.
  * - Does not support Zod structured output (Coming soon)
  *
- * The 2026 sandbox deployment lives at `ai.apps.ctlt.ubc.ca` (production) and
- * `ai-stg.apps.ctlt.ubc.ca` (staging) — see {@link UBC_LLM_SANDBOX_ENDPOINTS}
+ * The 2026 sandbox deployment lives at `ai-gateway.apps.ltic.ubc.ca`
+ * (production) and `ai-stg.apps.ctlt.ubc.ca` (staging) — see {@link UBC_LLM_SANDBOX_ENDPOINTS}
  * and {@link UBC_LLM_SANDBOX_MODELS} for the current URLs and model roster.
  *
  * The OpenAI-compatible transport itself is shared with the proxy provider; see

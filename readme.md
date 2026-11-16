@@ -229,7 +229,8 @@ Use the unified `reasoningEffort` option on `LLMOptions`. Each provider maps it 
 |---|---|---|---|
 | gpt-4o-mini | Yes | No | [GPT-4o mini](https://developers.openai.com/api/docs/models/gpt-4o-mini) |
 | gpt-5-mini | No (when reasoning active) | Yes — `minimal`, `low`, `medium`, `high` | [GPT-5 mini](https://developers.openai.com/api/docs/models/gpt-5-mini) |
-| gpt-oss-120b (UBC LLM Sandbox) | Yes | Yes — `low`, `medium`, `high` (others clamped) | [UBC LLM Sandbox Provider](#ubc-llm-sandbox-provider) |
+| qwen3.8-27b / qwen3.6-35b-a3b (UBC LLM Sandbox) | Yes | `none` turns thinking off; other values forwarded | [UBC LLM Sandbox Provider](#ubc-llm-sandbox-provider) |
+| gpt-oss-120b (UBC LLM Proxy, where still served) | Yes | Yes — `low`, `medium`, `high` (others clamped) | [Reasoning on sandbox models](#reasoning-on-sandbox-models) |
 
 The one exception to "not rewritten by this module" is the UBC gateways
 (`ubc-llm-sandbox` and `ubc-llm-proxy`), which clamp efforts onto the target
@@ -464,13 +465,14 @@ gateway.
 
 #### Endpoints
 
-Both environments run the same service and the same model roster; production is
-simply the staging URL without `-stg`. Exported as `UBC_LLM_SANDBOX_ENDPOINTS`:
+Exported as `UBC_LLM_SANDBOX_ENDPOINTS`. Production moved to
+`ai-gateway.apps.ltic.ubc.ca` in November 2026; the old `ai.apps.ctlt.ubc.ca`
+host no longer responds. Staging was not moved.
 
-| Environment  | Base URL                                |
-| ------------ | --------------------------------------- |
-| `staging`    | `https://ai-stg.apps.ctlt.ubc.ca/v1`    |
-| `production` | `https://ai.apps.ctlt.ubc.ca/v1`        |
+| Environment  | Base URL                                  |
+| ------------ | ----------------------------------------- |
+| `staging`    | `https://ai-stg.apps.ctlt.ubc.ca/v1`      |
+| `production` | `https://ai-gateway.apps.ltic.ubc.ca/v1`  |
 
 The `endpoint` you configure is normalized before use, so a bare host
 (`https://ai-stg.apps.ctlt.ubc.ca`), a trailing slash, or a full request URL
@@ -486,17 +488,22 @@ rather name `chat` than `qwen3.6-35b-a3b`.
 
 | Model                 | Role      | Notes                                                          |
 | --------------------- | --------- | -------------------------------------------------------------- |
-| `gpt-oss-120b`        | Reasoning | Takes `reasoningEffort` — `low`, `medium`, `high`. Tool calling works. |
+| `qwen3.8-27b`         | Reasoning | Temporary replacement for the deprecated `gpt-oss-120b`. Qwen3: thinks by default — see below. |
 | `qwen3.6-35b-a3b`     | Chat      | Thinks by default — see below. Tool calling needs `toolChoice: 'required'`. |
 | `qwen3-embedding-0.6b`| Embedding | 1024 dimensions. Set as `embeddingModel` to use `embed()`.      |
 
-Matching is exact — `GPT-OSS-120B`, `qwen3.6-35b-a3b:latest`, and
-`openai/gpt-oss-120b` are all rejected rather than repaired, because a model id
+Matching is exact — `QWEN3.8-27B`, `qwen3.6-35b-a3b:latest`, and
+`qwen/qwen3.8-27b` are all rejected rather than repaired, because a model id
 is a token the gateway defines.
+
+`gpt-oss-120b` was removed from the list when it was deprecated on the gateway.
+Requests for it now fail locally with a `ConfigurationError`; use
+`UBC_LLM_SANDBOX_MODELS.reasoning` rather than a literal id to follow the
+roster automatically.
 
 ```typescript
 import {
-	UBC_LLM_SANDBOX_APPROVED_MODELS, // ['gpt-oss-120b', 'qwen3.6-35b-a3b', 'qwen3-embedding-0.6b']
+	UBC_LLM_SANDBOX_APPROVED_MODELS, // ['qwen3.8-27b', 'qwen3.6-35b-a3b', 'qwen3-embedding-0.6b']
 	isApprovedSandboxModel,
 } from 'ubc-genai-toolkit-llm';
 
@@ -515,24 +522,12 @@ rejected, and the toolkit translates it to whatever mechanism the target model
 actually uses. OpenAI models proxied through the sandbox keep OpenAI's own
 rules, so `reasoningEffort` on `gpt-4o` still fails fast with a `400`.
 
-**`gpt-oss-120b`** reads `reasoning_effort` and accepts only `low`, `medium`,
-`high` — the gateway returns `400` for anything else. Values outside that scale
-are clamped rather than rejected: `none`/`minimal` → `low`, `xhigh`/`max` → `high`.
-
-```typescript
-const response = await llm.sendMessage('Explain quicksort.', {
-	model: 'gpt-oss-120b',
-	reasoningEffort: 'medium',
-	maxTokens: 2048,
-});
-```
-
-**`qwen3.6-35b-a3b` thinks by default**, and its chain of thought is billed
-against `maxTokens` *before* any visible content is produced. A request with a
-tight budget therefore comes back with `stopReason: 'length'` and an **empty
-string** — the tokens were all spent thinking. Measured on staging, the same
-small JSON request cost ~1000 completion tokens with thinking on and 39 with it
-off.
+**Qwen3 models (`qwen3.8-27b`, `qwen3.6-35b-a3b`) think by default**, and the
+chain of thought is billed against `maxTokens` *before* any visible content is
+produced. A request with a tight budget therefore comes back with
+`stopReason: 'length'` and an **empty string** — the tokens were all spent
+thinking. Measured on staging with `qwen3.6-35b-a3b`, the same small JSON
+request cost ~1000 completion tokens with thinking on and 39 with it off.
 
 Qwen3 ignores `reasoning_effort`; thinking is a chat-template flag. Pass
 `reasoningEffort: 'none'` and the provider translates it for you:
@@ -550,9 +545,15 @@ So: either turn thinking off, or budget several thousand `maxTokens`. Leaving
 thinking on with a small budget is the one combination that silently returns
 nothing. An explicit `chat_template_kwargs` of your own always takes precedence.
 
+**`gpt-oss-120b`** is no longer on the sandbox, but the toolkit still handles it
+for gateways that serve it (for example through `ubc-llm-proxy`). It reads
+`reasoning_effort` and accepts only `low`, `medium`, `high` — the gateway
+returns `400` for anything else — so values outside that scale are clamped:
+`none`/`minimal` → `low`, `xhigh`/`max` → `high`.
+
 #### Tool calling
 
-`gpt-oss-120b` works with the default `toolChoice: 'auto'`.
+`qwen3.8-27b` has not been checked for tool calling on the sandbox yet.
 
 `qwen3.6-35b-a3b` currently requires `toolChoice: 'required'`. With `'auto'`
 the model emits its tool call as XML in the message body
@@ -589,7 +590,7 @@ const llm = new LLMModule({
 });
 
 const models = await llm.getAvailableModels();
-// e.g. ['gpt-oss-120b', 'qwen3.6-35b-a3b', 'openai/gpt-4o', 'text-embedding-3-large']
+// e.g. ['qwen3.8-27b', 'qwen3.6-35b-a3b', 'openai/gpt-4o', 'text-embedding-3-large']
 ```
 
 Ids come back **exactly** as LiteLLM reported them — same spelling, same order,
