@@ -71,7 +71,8 @@ function getOpenAIReasoningCapability(model) {
     if (id.startsWith('gpt-5') ||
         id.startsWith('o1') ||
         id.startsWith('o3') ||
-        id.startsWith('o4-mini')) {
+        id.startsWith('o4-mini') ||
+        id.startsWith('gpt-6')) {
         return 'optional';
     }
     return 'unsupported';

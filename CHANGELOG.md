@@ -2,12 +2,18 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.1] - 2026-11-16
+## [0.7.2] - 2026-11-16
 
 ### Changed
 
 -   **The production sandbox endpoint moved.** `UBC_LLM_SANDBOX_ENDPOINTS.production` is now `https://ai-gateway.apps.ltic.ubc.ca/v1`; the previous host, `ai.apps.ctlt.ubc.ca`, no longer responds. Staging (`ai-stg.apps.ctlt.ubc.ca`) is unchanged.
 -   **`qwen3.8-27b` replaces `gpt-oss-120b` in `UBC_LLM_SANDBOX_APPROVED_MODELS`.** `gpt-oss-120b` was deprecated on the gateway, and `qwen3.8-27b` is its temporary replacement. `UBC_LLM_SANDBOX_MODELS.reasoning` now points to `qwen3.8-27b`, so callers that use the role constant pick it up without code changes. A request that still names `gpt-oss-120b` is now rejected locally with a `ConfigurationError` that points to `ubc-llm-proxy`, instead of reaching the gateway. Because the reasoning model is now a Qwen3 model, `reasoningEffort: 'none'` turns thinking off (`chat_template_kwargs: { enable_thinking: false }`) instead of being clamped to `low`, and other efforts are forwarded unchanged rather than clamped to the gpt-oss scale. The gpt-oss clamping itself is unchanged for gateways that still serve the model.
+
+## [0.7.1] - 2026-11-04
+
+### Added
+
+-   Enable reasoning capability for gpt-6 models.
 
 ## [0.7.0] - 2026-08-12
 
