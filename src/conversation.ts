@@ -9,7 +9,7 @@ import {
 	LLMStructuredResponse,
 	StructuredOutputOptions,
 } from './types';
-import type { ZodType } from 'zod';
+import type { ZodType } from './types';
 import { Conversation, ConversationFactory } from './conversation-interface';
 
 /**

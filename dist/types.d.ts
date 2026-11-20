@@ -1,5 +1,4 @@
 import { ModuleConfig } from 'ubc-genai-toolkit-core';
-import type { ZodType } from 'zod';
 /**
  * LLM provider types
  *
@@ -262,7 +261,28 @@ export interface LLMResponse {
 export interface LLMStructuredResponse<T = unknown> extends LLMResponse {
     parsed: T;
 }
-export type { ZodType } from 'zod';
+/**
+ * A Zod schema accepted by the toolkit, where `T` is the type it parses to.
+ * Schemas built with either Zod 4 or Zod 3 match it, so applications can
+ * upgrade Zod on their own schedule.
+ *
+ * Deliberately a small structural type rather than a re-export of Zod's own
+ * `ZodType`: the application's copy of Zod is often not the copy the toolkit
+ * installs, and comparing two copies of Zod's full class types is slow enough
+ * to exhaust the TypeScript compiler's memory.
+ */
+export interface ZodType<T = any> {
+    /** Zod's inferred-output marker; present on every Zod 3 and Zod 4 schema. */
+    readonly _output: T;
+    parse(data: unknown, ...rest: any[]): T;
+    safeParse(data: unknown, ...rest: any[]): {
+        success: true;
+        data: T;
+    } | {
+        success: false;
+        error: any;
+    };
+}
 /**
  * Options specifically for embedding requests.
  */

@@ -17,7 +17,7 @@ exports.toOllamaMessages = toOllamaMessages;
 exports.toOllamaTools = toOllamaTools;
 exports.fromOllamaToolCalls = fromOllamaToolCalls;
 exports.mapOllamaDoneReason = mapOllamaDoneReason;
-const zod_to_json_schema_1 = require("zod-to-json-schema");
+const zod_json_schema_1 = require("./zod-json-schema");
 /**
  * Ollama attaches images to a message via an `images` field of base64 strings
  * (vision-capable models). Returns an empty object for text-only messages.
@@ -65,10 +65,7 @@ function toOllamaTools(tools) {
         function: {
             name: tool.name,
             description: tool.description,
-            parameters: (0, zod_to_json_schema_1.zodToJsonSchema)(tool.parameters, {
-                target: 'jsonSchema7',
-                $refStrategy: 'none',
-            }),
+            parameters: (0, zod_json_schema_1.zodSchemaToJsonSchema)(tool.parameters),
         },
     }));
 }

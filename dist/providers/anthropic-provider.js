@@ -210,6 +210,7 @@ class AnthropicProvider {
                 ...rest,
                 output_config: {
                     ...(reasoningFields.output_config ?? {}),
+                    // The SDK helper is typed (and implemented) for Zod 4 schemas only.
                     format: (0, zod_1.zodOutputFormat)(schema),
                 },
                 ...(reasoningFields.thinking

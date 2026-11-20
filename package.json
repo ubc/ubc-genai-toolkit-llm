@@ -1,6 +1,6 @@
 {
   "name": "ubc-genai-toolkit-llm",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "LLM module for the UBC GenAI Toolkit, providing a unified interface for interacting with various large language models.",
   "homepage": "https://github.com/ubc/ubc-genai-toolkit-llm#readme",
   "bugs": {
@@ -29,9 +29,9 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",
     "ollama": "^0.5.14",
-    "openai": "^4.89.0",
+    "openai": "^7.62.0",
     "ubc-genai-toolkit-core": "^0.1.0",
-    "zod": "^3.25.0",
+    "zod": "^4.6.7",
     "zod-to-json-schema": "^3.24.5"
   },
   "devDependencies": {

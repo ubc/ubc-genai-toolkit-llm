@@ -20,7 +20,7 @@ exports.toAnthropicTools = toAnthropicTools;
 exports.toAnthropicToolChoice = toAnthropicToolChoice;
 exports.fromAnthropicToolUse = fromAnthropicToolUse;
 exports.mapAnthropicStopReason = mapAnthropicStopReason;
-const zod_to_json_schema_1 = require("zod-to-json-schema");
+const zod_json_schema_1 = require("./zod-json-schema");
 const ubc_genai_toolkit_core_1 = require("ubc-genai-toolkit-core");
 /**
  * Message content for the Anthropic SDK: a plain string, or a content-block
@@ -118,10 +118,7 @@ function toAnthropicTools(tools) {
     return tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        input_schema: (0, zod_to_json_schema_1.zodToJsonSchema)(tool.parameters, {
-            target: 'jsonSchema7',
-            $refStrategy: 'none',
-        }),
+        input_schema: (0, zod_json_schema_1.zodSchemaToJsonSchema)(tool.parameters),
     }));
 }
 /**

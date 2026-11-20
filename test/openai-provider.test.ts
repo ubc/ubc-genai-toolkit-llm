@@ -12,8 +12,8 @@ vi.mock('openai', () => {
 	}
 	class MockOpenAI {
 		static APIError = MockAPIError;
-		chat = { completions: { create: createMock } };
-		beta = { chat: { completions: { parse: parseMock } } };
+		// openai 5+ exposes parse() on chat.completions (it was beta.chat.completions in 4.x).
+		chat = { completions: { create: createMock, parse: parseMock } };
 		models = { list: vi.fn() };
 		embeddings = { create: vi.fn() };
 	}

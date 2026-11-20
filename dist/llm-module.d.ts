@@ -1,6 +1,6 @@
 import { LLMConfig, LLMOptions, LLMResponse, LLMStructuredResponse, Message, StructuredOutputOptions, EmbeddingOptions, EmbeddingResponse } from './types';
 import { Conversation, ConversationFactory } from './conversation-interface';
-import type { ZodType } from 'zod';
+import type { ZodType } from './types';
 /**
  * Main LLM Module facade
  *

@@ -16,7 +16,7 @@ exports.toOpenAIMessages = toOpenAIMessages;
 exports.toOpenAITools = toOpenAITools;
 exports.fromOpenAIToolCalls = fromOpenAIToolCalls;
 exports.mapOpenAIFinishReason = mapOpenAIFinishReason;
-const zod_to_json_schema_1 = require("zod-to-json-schema");
+const zod_json_schema_1 = require("./zod-json-schema");
 const ubc_genai_toolkit_core_1 = require("ubc-genai-toolkit-core");
 const ALLOWED_REASONING_EFFORTS = new Set([
     'none',
@@ -194,10 +194,7 @@ function toOpenAITools(tools) {
         function: {
             name: tool.name,
             description: tool.description,
-            parameters: (0, zod_to_json_schema_1.zodToJsonSchema)(tool.parameters, {
-                target: 'jsonSchema7',
-                $refStrategy: 'none',
-            }),
+            parameters: (0, zod_json_schema_1.zodSchemaToJsonSchema)(tool.parameters),
         },
     }));
 }
@@ -210,11 +207,13 @@ function toOpenAITools(tools) {
  * arguments — callers cannot execute a tool with unparseable input.
  */
 function fromOpenAIToolCalls(message) {
-    const toolCalls = message?.tool_calls;
+    // Only function tool calls are requested; anything else has no `function` payload to normalize.
+    const toolCalls = message?.tool_calls?.filter((call) => call.function);
     if (!toolCalls || toolCalls.length === 0) {
         return undefined;
     }
-    return toolCalls.map((call) => {
+    return toolCalls.map(({ id, function: fn }) => {
+        const call = { id, function: fn };
         let args;
         try {
             args = call.function.arguments ? JSON.parse(call.function.arguments) : {};

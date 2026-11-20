@@ -8,7 +8,7 @@
  */
 
 import OpenAI from 'openai';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { zodSchemaToJsonSchema } from './zod-json-schema';
 import { APIError } from 'ubc-genai-toolkit-core';
 import {
 	LLMOptions,
@@ -287,10 +287,7 @@ export function toOpenAITools(
 		function: {
 			name: tool.name,
 			description: tool.description,
-			parameters: zodToJsonSchema(tool.parameters as never, {
-				target: 'jsonSchema7',
-				$refStrategy: 'none',
-			}) as Record<string, unknown>,
+			parameters: zodSchemaToJsonSchema(tool.parameters),
 		},
 	}));
 }
@@ -300,7 +297,8 @@ interface OpenAIToolCallCarrier {
 	tool_calls?: Array<{
 		id: string;
 		type: string;
-		function: { name: string; arguments: string };
+		// Absent on OpenAI "custom" tool calls, which the toolkit never requests.
+		function?: { name: string; arguments: string };
 	}>;
 }
 
@@ -315,11 +313,13 @@ interface OpenAIToolCallCarrier {
 export function fromOpenAIToolCalls(
 	message: OpenAIToolCallCarrier | undefined
 ): ToolCall[] | undefined {
-	const toolCalls = message?.tool_calls;
+	// Only function tool calls are requested; anything else has no `function` payload to normalize.
+	const toolCalls = message?.tool_calls?.filter((call) => call.function);
 	if (!toolCalls || toolCalls.length === 0) {
 		return undefined;
 	}
-	return toolCalls.map((call) => {
+	return toolCalls.map(({ id, function: fn }) => {
+		const call = { id, function: fn! };
 		let args: Record<string, unknown>;
 		try {
 			args = call.function.arguments ? JSON.parse(call.function.arguments) : {};

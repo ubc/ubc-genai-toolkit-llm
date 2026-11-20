@@ -32,7 +32,7 @@ export declare function separateOpenAIOptions(options?: LLMOptions): {
         stream: boolean | undefined;
         reasoningEffort: ReasoningEffort | undefined;
         tools: ToolDefinition[] | undefined;
-        toolChoice: "required" | "none" | "auto" | undefined;
+        toolChoice: "none" | "auto" | "required" | undefined;
         structuredOutputName: string | undefined;
     };
     rest: {
@@ -106,7 +106,7 @@ interface OpenAIToolCallCarrier {
     tool_calls?: Array<{
         id: string;
         type: string;
-        function: {
+        function?: {
             name: string;
             arguments: string;
         };

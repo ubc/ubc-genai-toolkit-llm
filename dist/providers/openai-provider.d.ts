@@ -18,7 +18,7 @@
  *
  * @see {@link Provider} for the shared interface.
  */
-import type { ZodType } from 'zod';
+import type { ZodType } from '../types';
 import { Provider } from './provider-interface';
 import { LLMOptions, LLMResponse, LLMStructuredResponse, Message, StructuredOutputOptions, EmbeddingOptions, EmbeddingResponse } from '../types';
 import { LoggerInterface } from 'ubc-genai-toolkit-core';

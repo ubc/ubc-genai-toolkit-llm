@@ -33,8 +33,8 @@ import {
 } from '../types';
 import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
 import { Ollama, EmbedResponse } from 'ollama';
-import { zodToJsonSchema } from 'zod-to-json-schema';
-import type { ZodType } from 'zod';
+import { zodSchemaToJsonSchema } from './zod-json-schema';
+import type { ZodType } from '../types';
 import {
 	ollamaImages,
 	toOllamaMessages,
@@ -288,12 +288,8 @@ export class OllamaProvider implements Provider {
 				ollamaMessages.unshift({ role: 'system', content: options.systemPrompt });
 			}
 
-			// Cast breaks TS "excessively deep" instantiation on some zod versions; runtime shape is still a valid JSON Schema object.
-			const jsonSchema = zodToJsonSchema(schema as never, {
-				// Ollama expects JSON Schema compatible objects; avoid $ref indirection the server may not resolve.
-				target: 'jsonSchema7',
-				$refStrategy: 'none',
-			}) as Record<string, unknown>;
+			// Ollama expects inline JSON Schema; the shared converter avoids $ref indirection the server may not resolve.
+			const jsonSchema = zodSchemaToJsonSchema(schema);
 
 			// Use the stored client instance directly
 			const response = await this.client.chat({

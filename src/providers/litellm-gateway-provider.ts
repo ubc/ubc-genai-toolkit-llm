@@ -40,7 +40,7 @@ import {
 	ConfigurationError,
 	ToolkitError,
 } from 'ubc-genai-toolkit-core';
-import type { ZodType } from 'zod';
+import type { ZodType } from '../types';
 import {
 	separateOpenAIOptions,
 	buildOpenAICompatCompletionFields,

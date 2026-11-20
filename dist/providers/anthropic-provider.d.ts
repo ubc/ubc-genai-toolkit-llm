@@ -21,7 +21,7 @@
 import { Provider } from './provider-interface';
 import { LLMOptions, LLMResponse, LLMStructuredResponse, Message, StructuredOutputOptions, EmbeddingOptions, EmbeddingResponse } from '../types';
 import { LoggerInterface } from 'ubc-genai-toolkit-core';
-import type { ZodType } from 'zod';
+import type { ZodType } from '../types';
 export declare class AnthropicProvider implements Provider {
     private client;
     private logger;

@@ -1,4 +1,4 @@
-import type { ZodType } from 'zod';
+import type { ZodType } from '../types';
 import { LLMOptions, LLMResponse, LLMStructuredResponse, Message, StructuredOutputOptions, EmbeddingOptions, EmbeddingResponse } from '../types';
 /**
  * Common interface for all LLM providers
