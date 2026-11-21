@@ -11,7 +11,7 @@
  *   {@link StopReason}.
  */
 
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { zodSchemaToJsonSchema } from './zod-json-schema';
 import {
 	Message,
 	StopReason,
@@ -78,10 +78,7 @@ export function toOllamaTools(tools: ToolDefinition[]): unknown[] {
 		function: {
 			name: tool.name,
 			description: tool.description,
-			parameters: zodToJsonSchema(tool.parameters as never, {
-				target: 'jsonSchema7',
-				$refStrategy: 'none',
-			}) as Record<string, unknown>,
+			parameters: zodSchemaToJsonSchema(tool.parameters),
 		},
 	}));
 }

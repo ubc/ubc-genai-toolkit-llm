@@ -26,7 +26,7 @@ import OpenAI from 'openai';
 import { Provider } from './provider-interface';
 import { LLMOptions, LLMResponse, LLMStructuredResponse, Message, StructuredOutputOptions, EmbeddingOptions, EmbeddingResponse } from '../types';
 import { LoggerInterface, ConfigurationError } from 'ubc-genai-toolkit-core';
-import type { ZodType } from 'zod';
+import type { ZodType } from '../types';
 import { OpenAICompatCompletionKnown } from './openai-compat-mapping';
 /** What a model id is being resolved for; used in error messages. */
 export type ModelPurpose = 'chat' | 'embedding';

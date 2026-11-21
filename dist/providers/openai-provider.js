@@ -154,7 +154,7 @@ class OpenAIProvider {
             const completionFields = (0, openai_compat_mapping_1.buildOpenAICompatCompletionFields)(model, known);
             // SDK uses this label inside the response_format payload; default keeps logs and debugging consistent across callers.
             const formatName = known.structuredOutputName ?? 'structured_output';
-            const response = await this.client.beta.chat.completions.parse({
+            const response = await this.client.chat.completions.parse({
                 ...rest,
                 ...completionFields,
                 model,

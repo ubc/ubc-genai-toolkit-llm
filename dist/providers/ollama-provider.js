@@ -24,7 +24,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.OllamaProvider = void 0;
 const ubc_genai_toolkit_core_1 = require("ubc-genai-toolkit-core");
 const ollama_1 = require("ollama");
-const zod_to_json_schema_1 = require("zod-to-json-schema");
+const zod_json_schema_1 = require("./zod-json-schema");
 const ollama_mapping_1 = require("./ollama-mapping");
 /**
  * Pulls toolkit-managed fields off `LLMOptions`, maps temperature / maxTokens into Ollama’s
@@ -214,12 +214,8 @@ class OllamaProvider {
             if (options?.systemPrompt && !messages.some((m) => m.role === 'system')) {
                 ollamaMessages.unshift({ role: 'system', content: options.systemPrompt });
             }
-            // Cast breaks TS "excessively deep" instantiation on some zod versions; runtime shape is still a valid JSON Schema object.
-            const jsonSchema = (0, zod_to_json_schema_1.zodToJsonSchema)(schema, {
-                // Ollama expects JSON Schema compatible objects; avoid $ref indirection the server may not resolve.
-                target: 'jsonSchema7',
-                $refStrategy: 'none',
-            });
+            // Ollama expects inline JSON Schema; the shared converter avoids $ref indirection the server may not resolve.
+            const jsonSchema = (0, zod_json_schema_1.zodSchemaToJsonSchema)(schema);
             // Use the stored client instance directly
             const response = await this.client.chat({
                 model,

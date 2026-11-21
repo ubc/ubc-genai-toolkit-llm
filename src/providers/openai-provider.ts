@@ -21,7 +21,7 @@
 
 import OpenAI from 'openai';
 import { zodResponseFormat } from 'openai/helpers/zod';
-import type { ZodType } from 'zod';
+import type { ZodType } from '../types';
 import { Provider } from './provider-interface';
 import {
 	LLMOptions,
@@ -212,7 +212,7 @@ export class OpenAIProvider implements Provider {
 			const formatName =
 				known.structuredOutputName ?? 'structured_output';
 
-			const response = await this.client.beta.chat.completions.parse({
+			const response = await this.client.chat.completions.parse({
 				...rest,
 				...completionFields,
 				model,

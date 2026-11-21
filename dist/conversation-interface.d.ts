@@ -1,4 +1,4 @@
-import type { ZodType } from 'zod';
+import type { ZodType } from './types';
 import { Message, LLMOptions, LLMResponse, LLMStructuredResponse, StructuredOutputOptions } from './types';
 export interface ConversationFactory {
     /**

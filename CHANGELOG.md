@@ -2,6 +2,22 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-11-20
+
+### Security
+
+-   **A fresh install no longer has high-severity dependencies.** `zod` moves from `^3.25.0` to `^4.6.7` (GHSA-mrhx-c7xc-m3w5 affects every `zod` below 4.6.6) and `openai` from `^4.89.0` to `^7.62.0` (4.55.0 to 5.23.2 are flagged because they use the affected `zod`). `npm audit --omit=dev` on a clean install now reports no vulnerabilities.
+
+### Changed
+
+-   **Schemas built with Zod 3 or Zod 4 are both accepted**, for `ToolDefinition.parameters` and for `sendStructuredConversation`. The toolkit converts whichever generation the application hands it, so applications can stay on Zod 3 or move to Zod 4 on their own schedule. Zod 3 schemas are converted exactly as before, so the JSON Schema sent to providers is unchanged for existing callers. Zod 4 schemas are converted with Zod's own `z.toJSONSchema`; in 0.7.x they were silently sent as an empty schema.
+-   **The exported `ZodType<T>` type is now a small structural interface** (`_output`, `parse`, `safeParse`) that every Zod 3 and Zod 4 schema satisfies, instead of a re-export of Zod 3's `ZodType<Output, Def, Input>` class type. Code that passes schemas to the toolkit is unaffected and type-checks against either Zod generation. Code that used the toolkit's `ZodType` re-export with two or three type arguments, or called other Zod methods (`.optional()`, `.describe()`, …) on a value typed with it, must import `ZodType` from `zod` directly.
+-   The OpenAI provider calls `chat.completions.parse` for structured output; `openai` 5 moved it out of `beta`. Request and response shapes are unchanged.
+
+### Known limitations
+
+-   Structured output on the **Anthropic** provider still requires a Zod 4 schema (from `zod` 4, or `zod/v4` in `zod` 3.25), as in 0.7.x: the Anthropic SDK's `zodOutputFormat` does not read Zod 3 schemas. Tool calling on Anthropic accepts both.
+
 ## [0.7.2] - 2026-11-16
 
 ### Changed

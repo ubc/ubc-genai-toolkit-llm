@@ -33,7 +33,8 @@ import {
 import { LoggerInterface, APIError } from 'ubc-genai-toolkit-core';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import type { ZodType } from 'zod';
+import type { ZodType } from '../types';
+import type { ZodType as Zod4Type } from 'zod';
 import type {
 	MessageParam,
 	MessageCreateParamsNonStreaming,
@@ -282,7 +283,8 @@ export class AnthropicProvider implements Provider {
 				...rest,
 				output_config: {
 					...(reasoningFields.output_config ?? {}),
-					format: zodOutputFormat(schema),
+					// The SDK helper is typed (and implemented) for Zod 4 schemas only.
+					format: zodOutputFormat(schema as Zod4Type<T>),
 				},
 				...(reasoningFields.thinking
 					? { thinking: reasoningFields.thinking }

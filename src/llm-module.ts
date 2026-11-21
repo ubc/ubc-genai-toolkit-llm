@@ -24,7 +24,7 @@ import { UbcLlmSandboxProvider } from './providers/ubc-llm-sandbox-provider';
 import { UbcLlmProxyProvider } from './providers/ubc-llm-proxy-provider';
 import { ConversationImpl } from './conversation';
 import { Conversation, ConversationFactory } from './conversation-interface';
-import type { ZodType } from 'zod';
+import type { ZodType } from './types';
 
 /**
  * Default LLM configuration

@@ -3,7 +3,7 @@
  * and interacts with an LLM via a ConversationFactory.
  */
 import { Message, LLMOptions, LLMResponse, LLMStructuredResponse, StructuredOutputOptions } from './types';
-import type { ZodType } from 'zod';
+import type { ZodType } from './types';
 import { Conversation, ConversationFactory } from './conversation-interface';
 /**
  * Implements the Conversation interface to manage a sequence of messages

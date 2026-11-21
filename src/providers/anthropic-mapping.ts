@@ -13,7 +13,7 @@
  * unit-testable without mocking the SDK.
  */
 
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { zodSchemaToJsonSchema } from './zod-json-schema';
 import { APIError } from 'ubc-genai-toolkit-core';
 import type {
 	MessageParam,
@@ -139,10 +139,7 @@ export function toAnthropicTools(tools: ToolDefinition[]): Tool[] {
 	return tools.map((tool) => ({
 		name: tool.name,
 		description: tool.description,
-		input_schema: zodToJsonSchema(tool.parameters as never, {
-			target: 'jsonSchema7',
-			$refStrategy: 'none',
-		}) as Tool['input_schema'],
+		input_schema: zodSchemaToJsonSchema(tool.parameters) as Tool['input_schema'],
 	}));
 }
 
